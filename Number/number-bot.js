@@ -51,7 +51,7 @@ ${flag} <b>${country_name} Fresh Number ${action_text}</b>
 
 Number: <code>${number}</code>
 
-⏳ <i>Waiting for OTP in the group and bot</i>
+⏳ <i>Waiting for OTP in the group and bot.</i>
 `;
 
 const NEW_FOOTER_QUOTE = ""; // Optional footer text (empty by default)
