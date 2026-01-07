@@ -49,7 +49,7 @@ const ASSIGNMENT_MESSAGE_TEMPLATE = (
 ) => `
 ${flag} <b>${country_name} Fresh Number ${action_text}</b>
 
-Number: <code>${number}</code>
+<code>${number}</code>
 
 ⏳ <i>Waiting for OTP in the group and bot.</i>
 `;
