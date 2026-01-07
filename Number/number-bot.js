@@ -19,7 +19,7 @@ const GITHUB_USERNAME = "sabbiR6251";
 const GITHUB_REPO_NAME = "User";
 const GITHUB_FILE_PATH = "users.json";
 
-const NUMBER_DB_URI = "mongodb+srv://bangladesh900200_db_user:Rasel123@number.kfxm7hy.mongodb.net/Number?retryWrites=true&w=Number";
+const NUMBER_DB_URI = "mongodb+srv://bangladesh900200_db_user:Rasel123@number.kfxm7hy.mongodb.net/Number?retryWrites=true&w=majority";
 
 const USER_DB_URI = "mongodb+srv://mdrasel666699990_db_user:Rasel123@user.xiwhpml.mongodb.net/UserDB?appName=User";
 
@@ -49,9 +49,9 @@ const ASSIGNMENT_MESSAGE_TEMPLATE = (
 ) => `
 ${flag} <b>${country_name} Fresh Number ${action_text}</b>
 
-<code>${number}</code>
+Number: <code>${number}</code>
 
-⏳ <i>Waiting for OTP in the group and bot.</i>
+⏳ <i>Waiting for OTP in the group and bot</i>
 `;
 
 const NEW_FOOTER_QUOTE = ""; // Optional footer text (empty by default)
@@ -565,9 +565,9 @@ bot.on('message', async (msg) => {
                 
                 // 🔄 Git Pull & Restart করছি
                 const { exec } = require('child_process');
-                const BOT_PATH = '/home/alif/all'; // 👈 আপনার path
+                const BOT_PATH = '/home/alif/rsl'; // 👈 আপনার path
                 
-                exec(`cd ${BOT_PATH} && git reset --hard && git pull origin main && pm2 restart all`, (error, stdout, stderr) => {
+                exec(`cd ${BOT_PATH} && git reset --hard && git pull origin main && pm2 restart rsl`, (error, stdout, stderr) => {
                     if (error) {
                         bot.sendMessage(chatId, `❌ **Restart Failed!**\n\n<pre>${error.message}</pre>`, { 
                             parse_mode: 'HTML',
