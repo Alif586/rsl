@@ -23,7 +23,7 @@ const BOT_TOKENS = {
 const USER_DB_URI = "mongodb+srv://mdrasel666699990_db_user:Rasel123@user.xiwhpml.mongodb.net/UserDB?appName=User";
 
 // OTP Workers এর জন্য NUMBER_DB_URI
-const NUMBER_DB_URI = "mongodb+srv://bangladesh900200_db_user:Rasel123@number.kfxm7hy.mongodb.net/Number?retryWrites=true&w=Number";
+const NUMBER_DB_URI = "mongodb+srv://bangladesh900200_db_user:Rasel123@number.kfxm7hy.mongodb.net/Number?retryWrites=true&w=majority";
 
 // ============================================================
 // 🎨 LOGGING SYSTEM (Time Removed)
