@@ -5,33 +5,34 @@ const TelegramBot = require("node-telegram-bot-api");
 // ============================================================
 // ⚙️ ADMIN CONFIGURATION
 // ============================================================
-const ADMIN_IDS = ["6006322754", "6135656510", "1817149496"];
+const ADMIN_IDS = ["6006322754", "1817149496"];
 
 // ============================================================
 // 🤖 BOT CONFIGURATION (ALL TOKENS HERE)
 // ============================================================
 const BOT_TOKENS = {
     // Bot 1: Notification Bot (Group/Channel এ সব SMS পাঠাবে)
-    NOTIFICATION_BOT: "7994972018:AAHpfIJZl8zu9j1gtX392vgCIu7RT4sKokU",
+    NOTIFICATION_BOT: "8434361736:AAGR3xKtjtbycuTqwTO9tyh_bqfuCZcI88o",
 
     // Bot 2: User Bot (Users দের Private OTP পাঠাবে + Number Bot)
-    USER_BOT: "8320415016:AAGSfutZtPUs8cSB0rD-WQTiprXbBC1Azgc"
+    USER_BOT: "8499409386:AAHbvjiq00IP2y2FQEkK9pUYIH_8K1tASUI"
 };
 
 const GROUP_LINKS = {
-    OTP_GROUP_ID: "-1003418731250",
-    MAIN_CHANNEL_LINK: "https://t.me/RX_ALL_NUMBER_PANEL",
-    NUMBER_PANEL_LINK: "https://t.me/smszone1bot"
+    OTP_GROUP_ID: "-1002963724688",
+    MAIN_CHANNEL_LINK: "https://t.me/OTP_fast_Mobile_Tips",
+    NUMBER_PANEL_LINK: "https://t.me/OTP_Fast7_Bot"
 };
 
 // ============================================================
 // 🗄️ MONGODB CONFIGURATION
 // ============================================================
 // Number Bot এর জন্য USER_DB_URI
-const USER_DB_URI = "mongodb+srv://sabbirrehman905_db_user:sabbir123@userjson.f0vppgx.mongodb.net/UserDB?appName=Userjson";
+const USER_DB_URI = "mongodb+srv://mdrasel666699990_db_user:Rasel123@user.xiwhpml.mongodb.net/UserDB?appName=User";
 
 // OTP Workers এর জন্য NUMBER_DB_URI
-const NUMBER_DB_URI = "mongodb+srv://rakibkhan625162_db_user:sabbir123@number.qdza7vx.mongodb.net/Number?retryWrites=true&w=majority";
+const NUMBER_DB_URI = "mongodb+srv://bangladesh900200_db_user:Rasel123@number.kfxm7hy.mongodb.net/Number?retryWrites=true&w=majority";
+
 
 
 
