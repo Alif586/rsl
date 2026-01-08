@@ -265,7 +265,7 @@ class OtpWorker1 extends EventEmitter {
                 inline_keyboard: [
                     [
                         { text: "🚀 Panel", url: this.config.GROUP_LINKS.NUMBER_PANEL_LINK },
-                        { text: "🛒 Buy Ip", url: this.config.GROUP_LINKS.MAIN_CHANNEL_LINK }
+                        { text: "🛒 Buy IP", url: this.config.GROUP_LINKS.MAIN_CHANNEL_LINK }
                     ]
                 ]
             }
