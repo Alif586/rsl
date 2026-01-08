@@ -20,7 +20,7 @@ const BOT_TOKENS = {
 
 const GROUP_LINKS = {
     OTP_GROUP_ID: "-1002963724688",
-    MAIN_CHANNEL_LINK: "https://t.me/OTP_fast_Mobile_Tips",
+    MAIN_CHANNEL_LINK: "https://t.me/Group_owner_Rasel",
     NUMBER_PANEL_LINK: "https://t.me/OTP_Fast7_Bot"
 };
 
