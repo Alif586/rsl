@@ -11,7 +11,7 @@ const mongoose = require('mongoose');
 // ===============================================
 // ✅ কনফিগারেশন
 // ===============================================
-const BOT_TOKEN = '8499409386:AAHbvjiq00IP2y2FQEkK9pUYIH_8K1tASUI';
+const BOT_TOKEN = '8499409386:AAE7w7F61I3PBGY8NwGYE7xEcaSrEW8n6Yw';
 const AUTHORIZED_BOT_ID = 8499409386;
 const OTP_GROUP_URL = "https://t.me/OTP_fast_Mobile_Tips";
 
