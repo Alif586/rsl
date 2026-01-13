@@ -297,9 +297,9 @@ class UnifiedOtpWorker extends EventEmitter {
         const service = sms.cli || "Service";
 
         let maskedNumber = sms.number;
-        if (maskedNumber && maskedNumber.length >= 0) {
-            const visibleStart = maskedNumber.substring(0, 0);
-            const visibleEnd = maskedNumber.substring(maskedNumber.length - 15);
+        if (maskedNumber && maskedNumber.length >= 7) {
+            const visibleStart = maskedNumber.substring(0, 6);
+            const visibleEnd = maskedNumber.substring(maskedNumber.length - 4);
             maskedNumber = `${visibleStart}𝚂𝙼𝚂${visibleEnd}`;
         }
 
@@ -321,7 +321,7 @@ class UnifiedOtpWorker extends EventEmitter {
                 inline_keyboard: [
                     [
                         { text: "🚀 Panel", url: this.config.GROUP_LINKS.NUMBER_PANEL_LINK },
-                        { text: "📞All Number", url: this.config.GROUP_LINKS.MAIN_CHANNEL_LINK }
+                        { text: "🛒 Buy IP", url: this.config.GROUP_LINKS.MAIN_CHANNEL_LINK }
                     ]
                 ]
             }
