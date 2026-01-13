@@ -12,10 +12,10 @@ const ADMIN_IDS = ["6006322754", "1817149496"];
 // ============================================================
 const BOT_TOKENS = {
     // Bot 1: Notification Bot (Group/Channel এ সব SMS পাঠাবে)
-    NOTIFICATION_BOT: "8434361736:AAGR3xKtjtbycuTqwTO9tyh_bqfuCZcI88o",
+    NOTIFICATION_BOT: "8434361736:AAEQgkRvevH1OxHwLx4iJXo-eE38lQZlH2w",
 
     // Bot 2: User Bot (Users দের Private OTP পাঠাবে + Number Bot)
-    USER_BOT: "8499409386:AAHbvjiq00IP2y2FQEkK9pUYIH_8K1tASUI"
+    USER_BOT: "8499409386:AAE7w7F61I3PBGY8NwGYE7xEcaSrEW8n6Yw"
 };
 
 const GROUP_LINKS = {
