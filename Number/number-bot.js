@@ -23,9 +23,6 @@ const NUMBER_DB_URI = "mongodb+srv://bangladesh900200_db_user:Rasel123@number.kf
 
 const USER_DB_URI = "mongodb+srv://mdrasel666699990_db_user:Rasel123@user.xiwhpml.mongodb.net/UserDB?appName=User";
 
-
-
-
 const USER_LIST_FILE = 'users.json';
 
 const REQUIRED_CHANNELS = [
@@ -51,38 +48,40 @@ ${flag} <b>${country_name} Fresh Number ${action_text}</b>
 
 Number: <code>${number}</code>
 
-⏳ <i>Waiting for OTP in the group and bot.</i>
+<blockquote>⏳বটের ভিতরে 5 সেকেন্ড ওয়েট করুন ওটিপি না পেলে গ্রুপ চেক করুন</blockquote>
 `;
 
 const NEW_FOOTER_QUOTE = ""; // Optional footer text (empty by default)
 
 
 
-
-
-
 // ===============================================
 // 🗄️ DATABASE CONNECTION SETUP
+// ===============================================
+// ===============================================
+// 🗄️ DATABASE CONNECTION SETUP (FIXED)
 // ===============================================
 const dbOptions = {
     serverSelectionTimeoutMS: 30000,
     socketTimeoutMS: 45000,
     family: 4,
-    maxPoolSize: 150,
-    minPoolSize: 10,
+    maxPoolSize: 50,
+    minPoolSize: 5,
     connectTimeoutMS: 10000,
+    maxIdleTimeMS: 30000,
+    compressors: 'zlib',
+    // ✅ SSL/TLS FIX
+    tls: true,
+    tlsAllowInvalidCertificates: false,
+    tlsAllowInvalidHostnames: false,
+    retryWrites: true,
+    retryReads: true
 };
 
 const numberConn = mongoose.createConnection(NUMBER_DB_URI, dbOptions);
-numberConn.on('connected', () => console.log("✅ Number DB Connected!"));
-
 const userConn = mongoose.createConnection(USER_DB_URI, dbOptions);
-userConn.on('connected', () => {
-    console.log("✅ User & Config DB Connected!");
-    syncSystem();
-});
 
-// --- Schemas ---
+// ✅ Define Schemas AFTER connections
 const numberSchema = new mongoose.Schema({
     number: { type: String, unique: true, required: true },
     country: { type: String, required: true },
@@ -92,30 +91,78 @@ const numberSchema = new mongoose.Schema({
     assigned_at: { type: Date, default: null },
     created_at: { type: Date, default: Date.now }
 });
-const NumberModel = numberConn.model('Number', numberSchema);
 
 const userSchema = new mongoose.Schema({
     userId: { type: Number, unique: true, required: true },
     joined_at: { type: Date, default: Date.now }
 });
-const UserModel = userConn.model('User', userSchema);
 
 const configSchema = new mongoose.Schema({
     key: { type: String, unique: true, required: true },
     value: { type: String, required: true }
 });
+
+// ✅ Create Models
+const NumberModel = numberConn.model('Number', numberSchema);
+const UserModel = userConn.model('User', userSchema);
 const ConfigModel = userConn.model('Config', configSchema);
 
-// --- ভেরিয়েবল ---
+// ✅ Connection Event Handlers
+numberConn.on('connected', async () => {
+    console.log("✅ Number DB Connected!");
+    await setupDatabaseIndexes();
+});
+
+numberConn.on('error', (err) => {
+    console.error("❌ Number DB Error:", err.message);
+});
+
+userConn.on('connected', () => {
+    console.log("✅ User & Config DB Connected!");
+    syncSystem();
+});
+
+userConn.on('error', (err) => {
+    console.error("❌ User DB Error:", err.message);
+});
+
+// ✅ Bot Initialization
 const bot = new TelegramBot(BOT_TOKEN, { 
     polling: { 
-        interval: 100,
+        interval: 1000,
         autoStart: true,
         params: {
-            timeout: 10
+            timeout: 30
         }
     } 
 });
+
+
+// ===============================================
+// 🔥 DATABASE INDEX SETUP
+// ===============================================
+async function setupDatabaseIndexes() {
+    try {
+        await NumberModel.collection.createIndex({ country: 1, status: 1 });
+        console.log("✅ Index: country + status");
+        
+        await NumberModel.collection.createIndex({ assigned_to: 1, status: 1 });
+        console.log("✅ Index: assigned_to + status");
+        
+        await NumberModel.collection.createIndex(
+            { assigned_at: 1 }, 
+            { 
+                expireAfterSeconds: 7200,
+                partialFilterExpression: { status: 'Used' }
+            }
+        );
+        console.log("✅ TTL Index: Auto-delete after 2 hours");
+        
+    } catch (error) {
+        console.error("❌ Index error:", error.message);
+    }
+}
+
 
 // ===============================================
 // 🛡️ ERROR HANDLING
@@ -125,17 +172,28 @@ bot.on('polling_error', (error) => {
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-    if (reason && reason.response && reason.response.statusCode === 403) {
-        console.log("⚠️ User blocked the bot. Message failed (Ignored to prevent crash).");
-    } else {
-        console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    const safeErrors = [
+        'query is too old',
+        'message is not modified',
+        'bot was blocked',
+        'user is deactivated',
+        'ETELEGRAM: 403'
+    ];
+    
+    const errorMsg = reason?.message || String(reason);
+    
+    if (!safeErrors.some(err => errorMsg.includes(err))) {
+        console.error('⚠️ Unhandled Rejection:', errorMsg);
     }
 });
 
 process.on('uncaughtException', (error) => {
-    console.error('Uncaught Exception:', error);
+    console.error('❌ Uncaught Exception:', error.message);
 });
 
+// ===============================================
+// 🗂️ GLOBAL VARIABLES
+// ===============================================
 let bot_users = new Set();
 let admin_country_temp_data = {};
 let last_action_time = {};
@@ -144,17 +202,9 @@ let country_data_cache = {};
 let user_states = {};
 let admin_file_buffer = {};
 let last_change_time = {};
-
-// 🔥 নতুন: অ্যাসাইনমেন্ট লক সিস্টেম (প্রতি দেশের জন্য)
 let country_assignment_locks = {};
-
-// 🔥 FIX: Country Index Mapping
 let countryToIndex = {};
 let indexToCountry = {};
-
-// ===============================================
-// 🆕 GLOBAL VARIABLES FOR ADD NOTIFICATION
-// ===============================================
 let bot_username = "";
 let add_session_data = [];
 let last_add_timestamp = 0;
@@ -162,11 +212,11 @@ let last_channel_msg_ids = {};
 
 bot.getMe().then((me) => {
     bot_username = me.username;
-    console.log(`✅ Bot Username Detected: @${bot_username}`);
+    console.log(`✅ Bot Username: @${bot_username}`);
 });
 
 // ===============================================
-// 🔧 FIX: Safe edit message wrapper
+// 🔧 UTILITY FUNCTIONS
 // ===============================================
 async function safeEditMessage(chatId, msgId, text, options = {}) {
     try {
@@ -179,11 +229,22 @@ async function safeEditMessage(chatId, msgId, text, options = {}) {
         if (error.response && error.response.body) {
             const errDesc = error.response.body.description;
             if (!errDesc.includes('message is not modified')) {
-                console.error('Edit message error:', errDesc);
+                console.error('Edit error:', errDesc);
             }
         }
     }
 }
+
+async function safeAnswerCallback(callbackQueryId, options = {}) {
+    try {
+        await bot.answerCallbackQuery(callbackQueryId, options);
+    } catch (error) {
+        if (!error.message.includes('query is too old')) {
+            console.error('Callback error:', error.message);
+        }
+    }
+}
+
 
 // ===============================================
 // 🕐 AUTO DELETE CLAIMED NUMBERS AFTER 2 HOURS
@@ -208,7 +269,6 @@ async function autoDeleteExpiredNumbers() {
 
 setInterval(autoDeleteExpiredNumbers, 10 * 60 * 1000);
 setTimeout(autoDeleteExpiredNumbers, 5000);
-
 // ===============================================
 // 🔄 GITHUB & DB SYNC LOGIC
 // ===============================================
@@ -336,7 +396,20 @@ async function addUserToLocalDb(userId) {
 // ===============================================
 // ⚙️ Helper Functions
 // ===============================================
+// ✅ OPTIMIZED: Cache rebuild with rate limiting
+let lastCacheRebuild = 0;
+const CACHE_REBUILD_INTERVAL = 5000; // 5 seconds minimum
+
 async function rebuildCountryCache() {
+    const now = Date.now();
+    
+    // Skip if rebuilt recently
+    if (now - lastCacheRebuild < CACHE_REBUILD_INTERVAL) {
+        return;
+    }
+    
+    lastCacheRebuild = now;
+    
     try {
         const result = await NumberModel.aggregate([
             {
@@ -344,7 +417,11 @@ async function rebuildCountryCache() {
                     _id: "$country",
                     flag: { $first: "$flag" },
                     total: { $sum: 1 },
-                    available: { $sum: { $cond: [{ $eq: ["$status", "Available"] }, 1, 0] } }
+                    available: { 
+                        $sum: { 
+                            $cond: [{ $eq: ["$status", "Available"] }, 1, 0] 
+                        } 
+                    }
                 }
             }
         ]).allowDiskUse(true);
@@ -355,11 +432,17 @@ async function rebuildCountryCache() {
 
         let idx = 0;
         result.forEach(r => {
-            country_data_cache[r._id] = { flag: r.flag, available: r.available, total: r.total };
+            country_data_cache[r._id] = { 
+                flag: r.flag, 
+                available: r.available, 
+                total: r.total 
+            };
             countryToIndex[r._id] = idx;
             indexToCountry[idx] = r._id;
             idx++;
         });
+        
+        console.log(`✅ Cache rebuilt: ${idx} countries`);
     } catch (e) {
         console.error("Cache rebuild error:", e);
     }
@@ -478,6 +561,7 @@ function getVerificationMarkup() {
     return { inline_keyboard: buttons };
 }
 
+
 async function sendVerificationPrompt(userId, messageId = null) {
     const text = `⚠️ **Access Denied!**\nPlease join our channels to use the bot.`;
     const markup = getVerificationMarkup();
@@ -565,9 +649,9 @@ bot.on('message', async (msg) => {
                 
                 // 🔄 Git Pull & Restart করছি
                 const { exec } = require('child_process');
-                const BOT_PATH = '/home/alif/rsl'; // 👈 আপনার path
+                const BOT_PATH = '/home/alif/sms'; // 👈 আপনার path
                 
-                exec(`cd ${BOT_PATH} && git reset --hard && git pull origin main && pm2 restart rsl`, (error, stdout, stderr) => {
+                exec(`cd ${BOT_PATH} && git reset --hard && git pull origin main && pm2 restart all`, (error, stdout, stderr) => {
                     if (error) {
                         bot.sendMessage(chatId, `❌ **Restart Failed!**\n\n<pre>${error.message}</pre>`, { 
                             parse_mode: 'HTML',
@@ -825,21 +909,61 @@ async function processUploadedFile(userId, fileId, inputName) {
 async function processBroadcast(msg) {
     const userId = msg.from.id;
     const totalUsers = bot_users.size;
-    bot.sendMessage(userId, `📡 **Broadcasting to ${totalUsers}...**`, { parse_mode: 'Markdown' });
+    
+    const statusMsg = await bot.sendMessage(
+        userId, 
+        `📡 **Broadcasting to ${totalUsers}...**\n⏳ Estimated time: ${Math.ceil(totalUsers * 0.1)} seconds`, 
+        { parse_mode: 'Markdown' }
+    );
 
-    let success = 0, fail = 0;
+    let success = 0, fail = 0, blocked = 0;
     const usersArray = Array.from(bot_users);
+    const batchSize = 20; // Process in batches
 
-    for (const targetId of usersArray) {
-        if (ADMIN_IDS.includes(targetId)) continue;
-        try {
-            await bot.copyMessage(targetId, msg.chat.id, msg.message_id);
-            success++;
-            await new Promise(r => setTimeout(r, 40));
-        } catch (e) { fail++; }
+    for (let i = 0; i < usersArray.length; i += batchSize) {
+        const batch = usersArray.slice(i, i + batchSize);
+        
+        await Promise.all(batch.map(async (targetId) => {
+            if (ADMIN_IDS.includes(targetId)) return;
+            
+            try {
+                await bot.copyMessage(targetId, msg.chat.id, msg.message_id);
+                success++;
+            } catch (e) {
+                if (e.response && e.response.statusCode === 403) {
+                    blocked++;
+                    bot_users.delete(targetId); // Remove blocked users
+                } else {
+                    fail++;
+                }
+            }
+        }));
+        
+        // Rate limit: 20 messages per second
+        await new Promise(r => setTimeout(r, 1000));
+        
+        // Update progress every 100 users
+        if (i % 100 === 0 && i > 0) {
+            try {
+                await safeEditMessage(
+                    userId, 
+                    statusMsg.message_id, 
+                    `📡 **Broadcasting...**\n✅ Sent: ${success}\n❌ Failed: ${fail}\n🚫 Blocked: ${blocked}\n⏳ Progress: ${Math.round((i / totalUsers) * 100)}%`,
+                    { parse_mode: 'Markdown' }
+                );
+            } catch (e) {}
+        }
     }
-    bot.sendMessage(userId, `✅ **Done!**\n🟢 Success: ${success}\n🔴 Failed: ${fail}`, { parse_mode: 'Markdown', reply_markup: getAdminMenuKeyboard() });
+    
+    await safeEditMessage(
+        userId,
+        statusMsg.message_id,
+        `✅ **Broadcast Complete!**\n🟢 Success: ${success}\n🔴 Failed: ${fail}\n🚫 Blocked: ${blocked}`,
+        { parse_mode: 'Markdown', reply_markup: getAdminMenuKeyboard() }
+    );
+    
     delete user_states[userId];
+    syncSystem(); // Sync after broadcast
 }
 
 async function sendStatus(chatId) {
@@ -898,23 +1022,32 @@ bot.on('callback_query', async (call) => {
     const msgId = call.message.message_id;
     const chatId = call.message.chat.id;
 
+    // ❌ REMOVED: Global safeAnswerCallback এখান থেকে সরিয়েছি।
+    // কারণ এটা শুরুতে থাকলে নিচের 'show_alert' কাজ করবে না।
+
     if (data === 'verify_check') {
         if (await isUserMember(userId)) {
-            await safeEditMessage(chatId, msgId, "✅ Verified!");
+            await safeAnswerCallback(call.id); // ✅ Here
+            await safeEditMessage(chatId, msgId, "✅ Verification Successful!\nWelcome to our platform.\nEnjoy a smooth and secure experience.");
             bot.sendMessage(userId, "Menu:", { reply_markup: getMainMenuKeyboard(userId) });
         } else {
-            bot.answerCallbackQuery(call.id, { text: "❌ Join channels!", show_alert: true });
+            // ⚠️ Alert needs direct answer
+            try {
+                await bot.answerCallbackQuery(call.id, { text: "❌ Join channels!", show_alert: true });
+            } catch (e) {}
         }
         return;
     }
 
     if (data === 'cancel_delete' && isAdmin(userId)) {
+        await safeAnswerCallback(call.id); // ✅ Here
         await safeEditMessage(chatId, msgId, "✅ Cancelled.");
         bot.sendMessage(userId, "Menu:", { reply_markup: getAdminMenuKeyboard() });
         return;
     }
 
     if (data.startsWith('sdc:') && isAdmin(userId)) {
+        await safeAnswerCallback(call.id); // ✅ Here
         const countryIdx = parseInt(data.split(':')[1]);
         const country = indexToCountry[countryIdx];
         admin_country_temp_data[userId] = country;
@@ -930,6 +1063,7 @@ bot.on('callback_query', async (call) => {
     }
 
     if (data.startsWith('cdc:') && isAdmin(userId)) {
+        await safeAnswerCallback(call.id); // ✅ Here
         const countryIdx = parseInt(data.split(':')[1]);
         const country = indexToCountry[countryIdx];
         if (admin_country_temp_data[userId] !== country) return;
@@ -983,27 +1117,39 @@ bot.on('callback_query', async (call) => {
     }
 
     if (!isAdmin(userId) && !(await isUserMember(userId))) return;
+    
+    // Check Action Allowance
     const { allowed, remaining } = isUserAllowedAction(userId);
-    if (!allowed) { bot.answerCallbackQuery(call.id, { text: `Wait ${remaining}s`, show_alert: true }); return; }
+    if (!allowed) { 
+        try {
+            await bot.answerCallbackQuery(call.id, { text: `Wait ${remaining}s`, show_alert: true });
+        } catch(e) {}
+        return; 
+    }
 
-    // 🔥 ASSIGN NUMBER WITH LOCK (PREVENTS DUPLICATE ASSIGNMENT)
+    // 🔥 ASSIGN NUMBER
     if (data.startsWith('assign_number:')) {
+        await safeAnswerCallback(call.id); // ✅ Here to stop loading
         const countryIdx = parseInt(data.split(':')[1]);
         const country = indexToCountry[countryIdx];
+
+        await safeEditMessage(chatId, msgId, "⏳ **Assigning number...**", { parse_mode: 'Markdown' });
 
         if (!country_assignment_locks[country]) {
             country_assignment_locks[country] = new Set();
         }
 
         if (country_assignment_locks[country].has(userId)) {
-            bot.answerCallbackQuery(call.id, { text: "⏳ Processing your request...", show_alert: false });
             return;
         }
 
         country_assignment_locks[country].add(userId);
 
         try {
-            await NumberModel.updateMany({ assigned_to: userId, status: 'Used' }, { $set: { status: 'Used_History', assigned_to: null, assigned_at: null } });
+            await NumberModel.updateMany(
+                { assigned_to: userId, status: 'Used' }, 
+                { $set: { status: 'Used_History', assigned_to: null, assigned_at: null } }
+            );
 
             const availableNumbers = await NumberModel.aggregate([
                 { $match: { country: country, status: 'Available' } },
@@ -1018,8 +1164,10 @@ bot.on('callback_query', async (call) => {
                 );
 
                 let displayNum = randomNum.number.startsWith('+') ? randomNum.number : '+' + randomNum.number;
-                await safeEditMessage(chatId, msgId, ASSIGNMENT_MESSAGE_TEMPLATE(randomNum.flag, randomNum.country, displayNum, "Assigned", NEW_FOOTER_QUOTE),
-                    { parse_mode: 'HTML', reply_markup: getNumberControlKeyboard() });
+                await safeEditMessage(chatId, msgId, 
+                    ASSIGNMENT_MESSAGE_TEMPLATE(randomNum.flag, randomNum.country, displayNum, "Assigned", NEW_FOOTER_QUOTE),
+                    { parse_mode: 'HTML', reply_markup: getNumberControlKeyboard() }
+                );
             } else {
                 await rebuildCountryCache();
                 await safeEditMessage(chatId, msgId, `❌ Sold Out.`);
@@ -1029,97 +1177,93 @@ bot.on('callback_query', async (call) => {
         }
     }
 
-    // 🔥 CHANGE NUMBER WITH FAST SMOOTH ANIMATION
+    // 🔥 CHANGE NUMBER WITH COOLDOWN (FIXED)
     else if (data === 'change_number_req') {
         const currentTime = Date.now() / 1000;
         const lastTime = last_change_time[userId] || 0;
         const timeDiff = currentTime - lastTime;
         const cooldownTime = 3;
 
+        // ✅ CHECK COOLDOWN FIRST (Before Answering)
         if (timeDiff < cooldownTime) {
-            const remaining = Math.ceil(cooldownTime - timeDiff);
-            bot.answerCallbackQuery(call.id, { text: `⏳ Please wait ${remaining} seconds before changing again!`, show_alert: true });
+            const remainingAlert = Math.ceil(cooldownTime - timeDiff);
+            try {
+                await bot.answerCallbackQuery(call.id, { 
+                    text: `⏳ Wait ${remainingAlert} second${remainingAlert > 1 ? 's' : ''}!`, 
+                    show_alert: true 
+                });
+            } catch (e) {
+                // If answer fails, user likely double-clicked very fast
+            }
             return;
         }
 
+        // ✅ COOLDOWN PASSED - NOW ANSWER
+        await safeAnswerCallback(call.id);
         last_change_time[userId] = currentTime;
 
-        const animationFrames = [
-            "🔄 <b>Changing Number...</b>\n━━━━━━━━━━━━\n⬇️ Loading...",
-            "🔄 <b>Changing Number...</b>\n━━━━━━━━━━━━\n⬇️⬇️ Loading...",
-            "🔄 <b>Changing Number...</b>\n━━━━━━━━━━━━\n⬇️⬇️⬇️ Loading...",
-            "🔄 <b>Changing Number...</b>\n━━━━━━━━━━━━\n⬆️⬆️⬆️ Almost...",
-            "🔄 <b>Changing Number...</b>\n━━━━━━━━━━━━\n⬆️⬆️ Almost...",
-            "🔄 <b>Changing Number...</b>\n━━━━━━━━━━━━\n⬆️ Ready..."
-        ];
+        // Optimized Animation (No setInterval to avoid hang)
+        try {
+            await safeEditMessage(chatId, msgId, "🔄 <b>Changing Number...</b>\n┏━━━━━━━━━━━━┓\n⬇️ Finding fresh line...", { parse_mode: 'HTML' });
+        } catch(e) {}
 
-        let frameIndex = 0;
-        const animationInterval = setInterval(async () => {
-            try {
-                await safeEditMessage(chatId, msgId, animationFrames[frameIndex], { parse_mode: 'HTML' });
-                frameIndex++;
-                if (frameIndex >= animationFrames.length) {
-                    clearInterval(animationInterval);
-                }
-            } catch (e) {}
-        }, 800);
-
+        // Immediate Execution (No artificial delay)
         const current = await NumberModel.findOne({ assigned_to: userId, status: 'Used' });
 
-        setTimeout(async () => {
-            clearInterval(animationInterval);
+        if (current) {
+            const country = current.country;
 
-            if (current) {
-                const country = current.country;
-
-                if (!country_assignment_locks[country]) {
-                    country_assignment_locks[country] = new Set();
-                }
-
-                if (country_assignment_locks[country].has(userId)) {
-                    await safeEditMessage(chatId, msgId, "⏳ Already processing...");
-                    return;
-                }
-
-                country_assignment_locks[country].add(userId);
-
-                try {
-                    const [_, availableNumbers] = await Promise.all([
-                        NumberModel.updateOne(
-                            { _id: current._id },
-                            { $set: { status: 'Used_History', assigned_to: null, assigned_at: null } }
-                        ),
-                        NumberModel.aggregate([
-                            { $match: { country: country, status: 'Available' } },
-                            { $sample: { size: 1 } }
-                        ])
-                    ]);
-
-                    if (availableNumbers.length > 0) {
-                        const newNumber = await NumberModel.findByIdAndUpdate(
-                            availableNumbers[0]._id,
-                            { $set: { status: 'Used', assigned_to: userId, assigned_at: new Date() } },
-                            { new: true }
-                        );
-
-                        let displayNum = newNumber.number.startsWith('+') ? newNumber.number : '+' + newNumber.number;
-                        await safeEditMessage(chatId, msgId, ASSIGNMENT_MESSAGE_TEMPLATE(newNumber.flag, newNumber.country, displayNum, "Changed", NEW_FOOTER_QUOTE),
-                            { parse_mode: 'HTML', reply_markup: getNumberControlKeyboard() });
-                    } else {
-                        await safeEditMessage(chatId, msgId, `❌ No numbers left in ${country}.`, {
-                            reply_markup: { inline_keyboard: [[{ text: "🌍 Change Country", callback_data: 'change_country_start' }]] }
-                        });
-                    }
-                } finally {
-                    country_assignment_locks[country].delete(userId);
-                }
-            } else {
-                await safeEditMessage(chatId, msgId, "❌ No active number.");
+            if (!country_assignment_locks[country]) {
+                country_assignment_locks[country] = new Set();
             }
-        }, 900);
+
+            if (country_assignment_locks[country].has(userId)) {
+                return;
+            }
+
+            country_assignment_locks[country].add(userId);
+
+            try {
+                const [_, availableNumbers] = await Promise.all([
+                    NumberModel.updateOne(
+                        { _id: current._id },
+                        { $set: { status: 'Used_History', assigned_to: null, assigned_at: null } }
+                    ),
+                    NumberModel.aggregate([
+                        { $match: { country: country, status: 'Available' } },
+                        { $sample: { size: 1 } }
+                    ])
+                ]);
+
+                if (availableNumbers.length > 0) {
+                    const newNumber = await NumberModel.findByIdAndUpdate(
+                        availableNumbers[0]._id,
+                        { $set: { status: 'Used', assigned_to: userId, assigned_at: new Date() } },
+                        { new: true }
+                    );
+
+                    let displayNum = newNumber.number.startsWith('+') ? newNumber.number : '+' + newNumber.number;
+                    await safeEditMessage(chatId, msgId, 
+                        ASSIGNMENT_MESSAGE_TEMPLATE(newNumber.flag, newNumber.country, displayNum, "Changed", NEW_FOOTER_QUOTE),
+                        { parse_mode: 'HTML', reply_markup: getNumberControlKeyboard() }
+                    );
+                } else {
+                    await safeEditMessage(chatId, msgId, `❌ No numbers left in ${country}.`, {
+                        reply_markup: { inline_keyboard: [[{ text: "🌍 Change Country", callback_data: 'change_country_start' }]] }
+                    });
+                }
+            } catch (e) {
+                console.error(e);
+            } finally {
+                country_assignment_locks[country].delete(userId);
+            }
+        } else {
+            await safeEditMessage(chatId, msgId, "❌ No active number.");
+        }
     }
 
     else if (data === 'change_country_start') {
+        await safeAnswerCallback(call.id); // ✅ Here
         await NumberModel.updateMany(
             { assigned_to: userId, status: 'Used' }, 
             { $set: { status: 'Used_History', assigned_to: null, assigned_at: null } }
@@ -1142,6 +1286,45 @@ bot.on('callback_query', async (call) => {
     }
 });
 
+
+setInterval(() => {
+    const oneHourAgo = Date.now() - 3600000;
+    let cleaned = 0;
+    
+    Object.keys(user_details_cache).forEach(key => {
+        if (user_details_cache[key]?.timestamp < oneHourAgo) {
+            delete user_details_cache[key];
+            cleaned++;
+        }
+    });
+    
+    Object.keys(country_assignment_locks).forEach(country => {
+        if (country_assignment_locks[country].size === 0) {
+            delete country_assignment_locks[country];
+        }
+    });
+    
+    if (cleaned > 0) console.log(`🧹 Cleaned ${cleaned} cache entries`);
+}, 30 * 60 * 1000);
+
+// ===============================================
+// 📴 GRACEFUL SHUTDOWN
+// ===============================================
+process.on('SIGTERM', async () => {
+    console.log('📴 Shutting down...');
+    bot.stopPolling();
+    await numberConn.close();
+    await userConn.close();
+    process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+    console.log('📴 SIGINT received...');
+    bot.stopPolling();
+    await numberConn.close();
+    await userConn.close();
+    process.exit(0);
+});
 
 // Start Sync
 try {
