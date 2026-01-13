@@ -649,9 +649,9 @@ bot.on('message', async (msg) => {
                 
                 // 🔄 Git Pull & Restart করছি
                 const { exec } = require('child_process');
-                const BOT_PATH = '/home/alif/sms'; // 👈 আপনার path
+                const BOT_PATH = '/home/alif/rsl'; // 👈 আপনার path
                 
-                exec(`cd ${BOT_PATH} && git reset --hard && git pull origin main && pm2 restart all`, (error, stdout, stderr) => {
+                exec(`cd ${BOT_PATH} && git reset --hard && git pull origin main && pm2 restart rsl`, (error, stdout, stderr) => {
                     if (error) {
                         bot.sendMessage(chatId, `❌ **Restart Failed!**\n\n<pre>${error.message}</pre>`, { 
                             parse_mode: 'HTML',
