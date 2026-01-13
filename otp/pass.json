@@ -77,18 +77,6 @@
       ]
     },
     {
-      "name": "NumberPanel",
-      "type": "http",
-      "server_ip": "51.89.99.105",
-      "base_path": "/ints",
-      "users": [
-        {
-          "username": "Rasel6669",
-          "password": "Rasel6669"
-        }
-      ]
-    },
-    {
       "name": "SMS-HID",
       "type": "http",
       "server_ip": "185.2.83.39",
