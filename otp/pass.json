@@ -14,7 +14,6 @@
           "username": "Rasel24",
           "password": "Rasel24"
         }
-
       ]
     },
     {
@@ -26,8 +25,10 @@
         {
           "username": "Rasel6669",
           "password": "Rasel6669"
-        },
-        {
+        }
+      ]
+    },
+    {
       "name": "Sniper",
       "type": "http",
       "server_ip": "135.125.222.224",
@@ -36,8 +37,10 @@
         {
           "username": "Rasel6669",
           "password": "Rasel6669"
-        },
-        {
+        }
+      ]
+    },
+    {
       "name": "Goat-sms",
       "type": "http",
       "server_ip": "167.114.117.67",
@@ -46,8 +49,10 @@
         {
           "username": "Rasel6669",
           "password": "Rasel6669"
-        },
-        {
+        }
+      ]
+    },
+    {
       "name": "Flyn-SMS",
       "type": "http",
       "server_ip": "91.232.105.47",
@@ -56,8 +61,10 @@
         {
           "username": "Rasel6669",
           "password": "Rasel6669"
-        },
-        {
+        }
+      ]
+    },
+    {
       "name": "FLYSMS",
       "type": "https",
       "server_ip": "flysms.net",
@@ -68,8 +75,8 @@
           "password": "Hussain1"
         }
       ]
-    },   
-        {
+    },
+    {
       "name": "HADI-SMS",
       "type": "http",
       "server_ip": "185.2.83.39",
@@ -78,17 +85,9 @@
         {
           "username": "Rasel6669",
           "password": "Rasel6669"
-        },
-        {
-      "name": "NumberPanel",
-      "type": "http",
-      "server_ip": "51.89.99.105",
-      "base_path": "/ints",
-      "users": [
-        {
-          "username": "Rasel6669",
-          "password": "Rasel6669"
-        },
+        }
+      ]
+    },
     {
       "name": "SMS-HID",
       "type": "http",
