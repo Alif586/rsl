@@ -337,7 +337,7 @@ class UnifiedOtpWorker extends EventEmitter {
                 inline_keyboard: [
                     [
                         { text: "🚀 Panel", url: this.config.GROUP_LINKS.NUMBER_PANEL_LINK },
-                        { text: "📞All Number", url: this.config.GROUP_LINKS.MAIN_CHANNEL_LINK }
+                        { text: "🛒 Buy IP", url: this.config.GROUP_LINKS.MAIN_CHANNEL_LINK }
                     ]
                 ]
             }
