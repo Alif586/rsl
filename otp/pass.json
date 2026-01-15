@@ -29,6 +29,22 @@
       ]
     },
     {
+      "name": "IMSSMS",
+      "type": "https",
+      "server_ip": "imssms.org",
+      "base_path": "",
+      "users": [
+        {
+          "username": "smszone",
+          "password": "smszone"
+        },
+        {
+          "username": "Rrsel6669",
+          "password": "Rrsel6669"
+        }
+      ]
+      },
+    {
       "name": "Sniper",
       "type": "http",
       "server_ip": "135.125.222.224",
