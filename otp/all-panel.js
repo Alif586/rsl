@@ -297,8 +297,8 @@ class UnifiedOtpWorker extends EventEmitter {
         const service = sms.cli || "Service";
 
         let maskedNumber = sms.number;
-        if (maskedNumber && maskedNumber.length >= 4) {
-            const visibleStart = maskedNumber.substring(0, 8);
+        if (maskedNumber && maskedNumber.length >= 7) {
+            const visibleStart = maskedNumber.substring(0, 4);
             const visibleEnd = maskedNumber.substring(maskedNumber.length - 4);
             maskedNumber = `${visibleStart}𝚂𝙼𝚂${visibleEnd}`;
         }
