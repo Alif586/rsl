@@ -1,5 +1,3 @@
-/* --- START OF FILE text/javascript --- */
-
 /**
  * Unified OTP Worker - Multi-Server Multi-User SMS Panel Monitoring
  * Supports all servers configured in pass.json
@@ -26,9 +24,6 @@ class UnifiedOtpWorker extends EventEmitter {
         this.NumberModel = null;
         this.servers = [];
         this.allUsers = [];
-        
-        // ✅ NEW: Database connection status flag
-        this.isDbReady = false;
 
         this.GLOBAL_USER_AGENTS = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
@@ -137,33 +132,22 @@ class UnifiedOtpWorker extends EventEmitter {
             created_at: { type: Date, default: Date.now }
         });
 
-        // ✅ Updated DB Options to match Main Bot & Prevent Timeouts
         const dbOptions = {
             serverSelectionTimeoutMS: 30000,
             socketTimeoutMS: 45000,
             family: 4,
             maxPoolSize: 100,
             minPoolSize: 5,
-            connectTimeoutMS: 30000,
-            bufferCommands: true,
-            autoIndex: true
         };
 
         const conn = mongoose.createConnection(this.config.NUMBER_DB_URI, dbOptions);
 
         conn.on('connected', () => {
-            this.isDbReady = true; // ✅ Set Flag
             this.emit('log', '✅ Database connected');
         });
 
         conn.on('error', (err) => {
-            this.isDbReady = false;
             this.emit('error', `Database error: ${err.message}`);
-        });
-
-        conn.on('disconnected', () => {
-            this.isDbReady = false;
-            this.emit('log', '⚠️ Database disconnected');
         });
 
         this.NumberModel = conn.model('Number', numberSchema);
@@ -313,10 +297,10 @@ class UnifiedOtpWorker extends EventEmitter {
         const service = sms.cli || "Service";
 
         let maskedNumber = sms.number;
-        if (maskedNumber && maskedNumber.length >= 0) {
-            const visibleStart = maskedNumber.substring(0, 0);
-            const visibleEnd = maskedNumber.substring(maskedNumber.length - 13);
-            maskedNumber = `${visibleStart}${visibleEnd}`;
+        if (maskedNumber && maskedNumber.length >= 7) {
+            const visibleStart = maskedNumber.substring(0, 6);
+            const visibleEnd = maskedNumber.substring(maskedNumber.length - 4);
+            maskedNumber = `${visibleStart}𝚂𝙼𝚂${visibleEnd}`;
         }
 
         const finalMsg = `${flag} <b>${countryName} ${service} Otp Code Received Successfully</b> 🎉
@@ -362,20 +346,6 @@ class UnifiedOtpWorker extends EventEmitter {
         if (!sms.number || !sms.message) return;
         const otp = this.extractOtp(sms.message);
         const cleanNumber = String(sms.number).replace(/\D/g, "");
-
-        // ✅ NEW: Wait for Database before querying
-        if (!this.isDbReady) {
-            this.emit('log', '⏳ Waiting for DB before checking user...');
-            let attempts = 0;
-            while (!this.isDbReady && attempts < 15) { // Wait up to 15 seconds
-                await new Promise(r => setTimeout(r, 1000));
-                attempts++;
-            }
-            if (!this.isDbReady) {
-                this.emit('error', '❌ DB Connection Timeout. Skipping user check.');
-                return;
-            }
-        }
 
         try {
             const record = await this.NumberModel.findOne({
