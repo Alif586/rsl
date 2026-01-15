@@ -56,32 +56,34 @@ const NEW_FOOTER_QUOTE = ""; // Optional footer text (empty by default)
 
 
 // ===============================================
-// 🗄️ DATABASE CONNECTION SETUP
-// ===============================================
-// ===============================================
-// 🗄️ DATABASE CONNECTION SETUP (FIXED)
+// 🗄️ DATABASE CONNECTION SETUP (FIXED & OPTIMIZED)
 // ===============================================
 const dbOptions = {
-    serverSelectionTimeoutMS: 30000,
+    serverSelectionTimeoutMS: 30000, // ✅ Fix: Increased timeout
     socketTimeoutMS: 45000,
     family: 4,
     maxPoolSize: 50,
     minPoolSize: 5,
-    connectTimeoutMS: 10000,
+    connectTimeoutMS: 30000, // ✅ Fix: Increased connection timeout
     maxIdleTimeMS: 30000,
     compressors: 'zlib',
-    // ✅ SSL/TLS FIX
     tls: true,
     tlsAllowInvalidCertificates: false,
     tlsAllowInvalidHostnames: false,
     retryWrites: true,
-    retryReads: true
+    retryReads: true,
+    bufferCommands: true, // Allow buffering but we control start time
+    autoIndex: true
 };
 
 const numberConn = mongoose.createConnection(NUMBER_DB_URI, dbOptions);
 const userConn = mongoose.createConnection(USER_DB_URI, dbOptions);
 
-// ✅ Define Schemas AFTER connections
+// ✅ NEW: Connection status flags to prevent early queries
+let isNumberDBReady = false;
+let isUserDBReady = false;
+
+// ✅ Define Schemas
 const numberSchema = new mongoose.Schema({
     number: { type: String, unique: true, required: true },
     country: { type: String, required: true },
@@ -107,42 +109,78 @@ const NumberModel = numberConn.model('Number', numberSchema);
 const UserModel = userConn.model('User', userSchema);
 const ConfigModel = userConn.model('Config', configSchema);
 
-// ✅ Connection Event Handlers
+// ✅ Connection Event Handlers (Updated)
 numberConn.on('connected', async () => {
     console.log("✅ Number DB Connected!");
+    isNumberDBReady = true;
     await setupDatabaseIndexes();
 });
 
 numberConn.on('error', (err) => {
     console.error("❌ Number DB Error:", err.message);
+    isNumberDBReady = false;
+});
+
+numberConn.on('disconnected', () => {
+    console.log("⚠️ Number DB Disconnected!");
+    isNumberDBReady = false;
 });
 
 userConn.on('connected', () => {
     console.log("✅ User & Config DB Connected!");
+    isUserDBReady = true;
     syncSystem();
 });
 
 userConn.on('error', (err) => {
     console.error("❌ User DB Error:", err.message);
+    isUserDBReady = false;
 });
+
+userConn.on('disconnected', () => {
+    console.log("⚠️ User DB Disconnected!");
+    isUserDBReady = false;
+});
+
+// ✅ NEW: Wait for Database Function
+async function waitForDB() {
+    console.log("⏳ Waiting for Database connections...");
+    let attempts = 0;
+    while ((!isNumberDBReady || !isUserDBReady) && attempts < 60) { // Wait up to 30 seconds
+        await new Promise(resolve => setTimeout(resolve, 500));
+        attempts++;
+    }
+    if (!isNumberDBReady || !isUserDBReady) {
+        console.error("❌ Database connection timed out! Restarting process...");
+        process.exit(1); // Force restart by PM2
+    }
+    console.log("🚀 All Databases Ready! Starting Bot...");
+    return true;
+}
 
 // ✅ Bot Initialization
 const bot = new TelegramBot(BOT_TOKEN, { 
-    polling: { 
-        interval: 1000,
-        autoStart: true,
-        params: {
-            timeout: 30
-        }
-    } 
+    polling: false // ✅ We start polling manually after DB is ready
 });
 
+async function startBot() {
+    try {
+        await waitForDB(); // ✅ This prevents "buffering timed out"
+        bot.startPolling();
+        console.log(`✅ Bot Username: @${bot_username || 'Loading...'}`);
+    } catch (error) {
+        console.error("❌ Failed to start bot:", error);
+    }
+}
 
 // ===============================================
 // 🔥 DATABASE INDEX SETUP
 // ===============================================
 async function setupDatabaseIndexes() {
     try {
+        // Ensure connection is ready before indexing
+        if (!isNumberDBReady) return;
+
         await NumberModel.collection.createIndex({ country: 1, status: 1 });
         console.log("✅ Index: country + status");
         
@@ -159,7 +197,7 @@ async function setupDatabaseIndexes() {
         console.log("✅ TTL Index: Auto-delete after 2 hours");
         
     } catch (error) {
-        console.error("❌ Index error:", error.message);
+        console.error("❌ Index error (Non-fatal):", error.message);
     }
 }
 
@@ -177,7 +215,8 @@ process.on('unhandledRejection', (reason, promise) => {
         'message is not modified',
         'bot was blocked',
         'user is deactivated',
-        'ETELEGRAM: 403'
+        'ETELEGRAM: 403',
+        'socket hang up'
     ];
     
     const errorMsg = reason?.message || String(reason);
@@ -212,7 +251,8 @@ let last_channel_msg_ids = {};
 
 bot.getMe().then((me) => {
     bot_username = me.username;
-    console.log(`✅ Bot Username: @${bot_username}`);
+    // Start the bot logic only after getting username and DBs are checked
+    startBot(); 
 });
 
 // ===============================================
@@ -250,6 +290,8 @@ async function safeAnswerCallback(callbackQueryId, options = {}) {
 // 🕐 AUTO DELETE CLAIMED NUMBERS AFTER 2 HOURS
 // ===============================================
 async function autoDeleteExpiredNumbers() {
+    if (!isNumberDBReady) return; // ✅ Safety Check
+
     try {
         const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
 
@@ -268,11 +310,12 @@ async function autoDeleteExpiredNumbers() {
 }
 
 setInterval(autoDeleteExpiredNumbers, 10 * 60 * 1000);
-setTimeout(autoDeleteExpiredNumbers, 5000);
+
 // ===============================================
 // 🔄 GITHUB & DB SYNC LOGIC
 // ===============================================
 async function getGitHubToken() {
+    if (!isUserDBReady) return null; // ✅ Safety Check
     const conf = await ConfigModel.findOne({ key: "github_token" });
     return conf ? conf.value : null;
 }
@@ -330,65 +373,74 @@ async function uploadToGithub(usersArray, token, sha = null) {
 }
 
 async function syncSystem() {
+    if (!isUserDBReady) return; // ✅ Safety Check
     console.log("🔄 Starting Sync System...");
     const token = await getGitHubToken();
 
-    const mongoUsersDocs = await UserModel.find({});
-    const mongoUserIds = new Set(mongoUsersDocs.map(u => u.userId));
-
-    let githubData = await fetchGithubUsers(token);
-    let githubUserIds = new Set();
-    if (githubData && Array.isArray(githubData.content)) {
-        githubUserIds = new Set(githubData.content);
-    }
-
-    const allUsers = new Set([...mongoUserIds, ...githubUserIds, ...bot_users]);
-    ADMIN_IDS.forEach(id => allUsers.add(id));
-
-    bot_users = allUsers;
-
-    const newForMongo = [];
-    allUsers.forEach(uid => {
-        if (!mongoUserIds.has(uid)) {
-            newForMongo.push({ userId: uid });
-        }
-    });
-
-    if (newForMongo.length > 0) {
-        await UserModel.insertMany(newForMongo, { ordered: false }).catch(() => {});
-        console.log(`📥 Added ${newForMongo.length} users to MongoDB from Sync.`);
-    }
-
-    if (token) {
-        const finalArray = Array.from(allUsers);
-        if (finalArray.length !== githubUserIds.size || newForMongo.length > 0) {
-            await uploadToGithub(finalArray, token, githubData ? githubData.sha : null);
-        }
-    }
-
     try {
-        fs.writeFileSync(USER_LIST_FILE, JSON.stringify(Array.from(allUsers), null, 4));
-    } catch (e) {}
+        const mongoUsersDocs = await UserModel.find({});
+        const mongoUserIds = new Set(mongoUsersDocs.map(u => u.userId));
 
-    console.log(`✅ Sync Complete. Total Users: ${allUsers.size}`);
+        let githubData = await fetchGithubUsers(token);
+        let githubUserIds = new Set();
+        if (githubData && Array.isArray(githubData.content)) {
+            githubUserIds = new Set(githubData.content);
+        }
+
+        const allUsers = new Set([...mongoUserIds, ...githubUserIds, ...bot_users]);
+        ADMIN_IDS.forEach(id => allUsers.add(id));
+
+        bot_users = allUsers;
+
+        const newForMongo = [];
+        allUsers.forEach(uid => {
+            if (!mongoUserIds.has(uid)) {
+                newForMongo.push({ userId: uid });
+            }
+        });
+
+        if (newForMongo.length > 0) {
+            await UserModel.insertMany(newForMongo, { ordered: false }).catch(() => {});
+            console.log(`📥 Added ${newForMongo.length} users to MongoDB from Sync.`);
+        }
+
+        if (token) {
+            const finalArray = Array.from(allUsers);
+            if (finalArray.length !== githubUserIds.size || newForMongo.length > 0) {
+                await uploadToGithub(finalArray, token, githubData ? githubData.sha : null);
+            }
+        }
+
+        try {
+            fs.writeFileSync(USER_LIST_FILE, JSON.stringify(Array.from(allUsers), null, 4));
+        } catch (e) {}
+
+        console.log(`✅ Sync Complete. Total Users: ${allUsers.size}`);
+    } catch (error) {
+        console.error("Sync Error:", error);
+    }
 }
 
 async function addUserToLocalDb(userId) {
     if (!bot_users.has(userId)) {
         bot_users.add(userId);
 
-        try {
-            await new UserModel({ userId: userId }).save();
-        } catch (e) {}
+        if (isUserDBReady) {
+            try {
+                await new UserModel({ userId: userId }).save();
+            } catch (e) {}
+        }
 
         try {
             fs.writeFileSync(USER_LIST_FILE, JSON.stringify(Array.from(bot_users), null, 4));
         } catch (e) {}
 
-        const token = await getGitHubToken();
-        if (token) {
-            const ghData = await fetchGithubUsers(token);
-            await uploadToGithub(Array.from(bot_users), token, ghData ? ghData.sha : null);
+        if (isUserDBReady) {
+            const token = await getGitHubToken();
+            if (token) {
+                const ghData = await fetchGithubUsers(token);
+                await uploadToGithub(Array.from(bot_users), token, ghData ? ghData.sha : null);
+            }
         }
     }
 }
@@ -401,6 +453,7 @@ let lastCacheRebuild = 0;
 const CACHE_REBUILD_INTERVAL = 5000; // 5 seconds minimum
 
 async function rebuildCountryCache() {
+    if (!isNumberDBReady) return; // ✅ Safety Check
     const now = Date.now();
     
     // Skip if rebuilt recently
@@ -605,22 +658,21 @@ bot.on('message', async (msg) => {
             if (text === 'sms') {
                 delete user_states[userId];
                 
-                // 🔄 Countdown Message পাঠাচ্ছি
+                // 🔄 Countdown Message
                 const countdownMsg = await bot.sendMessage(
                     chatId, 
                     "🔄 **Restarting Bot...**\n\n⏳ Please wait: **6** seconds\n\n⚠️ All buttons disabled!", 
                     { 
                         parse_mode: 'Markdown',
-                        reply_markup: { remove_keyboard: true } // সব button hide
+                        reply_markup: { remove_keyboard: true }
                     }
                 );
                 
                 const countdownMsgId = countdownMsg.message_id;
                 
-                // 📊 Countdown শুরু করছি (6 থেকে 1)
+                // 📊 Countdown
                 for (let i = 5; i >= 1; i--) {
-                    await new Promise(r => setTimeout(r, 1000)); // 1 second wait
-                    
+                    await new Promise(r => setTimeout(r, 1000));
                     try {
                         await bot.editMessageText(
                             `🔄 **Restarting Bot...**\n\n⏳ Please wait: **${i}** seconds\n\n⚠️ All buttons disabled!`,
@@ -630,9 +682,7 @@ bot.on('message', async (msg) => {
                                 parse_mode: 'Markdown'
                             }
                         );
-                    } catch (e) {
-                        // Edit error ignore করছি
-                    }
+                    } catch (e) {}
                 }
                 
                 // ✅ Final Success Message
@@ -647,11 +697,11 @@ bot.on('message', async (msg) => {
                     );
                 } catch (e) {}
                 
-                // 🔄 Git Pull & Restart করছি
+                // 🔄 Git Pull & Restart
                 const { exec } = require('child_process');
-                const BOT_PATH = '/home/alif/rsl'; // 👈 আপনার path
+                const BOT_PATH = '/home/alif/sms';
                 
-                exec(`cd ${BOT_PATH} && git reset --hard && git pull origin main && pm2 restart rsl`, (error, stdout, stderr) => {
+                exec(`cd ${BOT_PATH} && git reset --hard && git pull origin main && pm2 restart all`, (error, stdout, stderr) => {
                     if (error) {
                         bot.sendMessage(chatId, `❌ **Restart Failed!**\n\n<pre>${error.message}</pre>`, { 
                             parse_mode: 'HTML',
@@ -659,15 +709,10 @@ bot.on('message', async (msg) => {
                         });
                         return;
                     }
-                    
-                    // 2 second পরে process exit
-                    setTimeout(() => {
-                        process.exit(0);
-                    }, 2000);
+                    setTimeout(() => { process.exit(0); }, 2000);
                 });
                 
             } else {
-                // ❌ Wrong Password
                 bot.sendMessage(chatId, "🚫 বাল পাকনা, এটা আপনার জন্য না 😅**\n\n" +
 "এই অপশনটা শুধু বট ডেভেলপারদের জন্য। ফাইল আপডেট বট আপডেট এর জন্য\n" +
 "ভুল করে ঢুকে পড়লে এখনই ব্যাক যান\n👉 @alifhosson", { 
@@ -691,6 +736,10 @@ bot.on('message', async (msg) => {
         }
 
         if (user_states[userId] === 'AWAITING_GITHUB_TOKEN') {
+            if (!isUserDBReady) {
+                 bot.sendMessage(chatId, "❌ DB Not Ready.", { reply_markup: getAdminMenuKeyboard() });
+                 return;
+            }
             const newToken = text.trim();
             try {
                 await ConfigModel.findOneAndUpdate(
@@ -738,7 +787,6 @@ bot.on('message', async (msg) => {
     if (text === '/start') {
         bot.sendMessage(chatId, "Welcome! Choose your option:", { reply_markup: getMainMenuKeyboard(userId) });
         
-    // 🔄 /restart Command - Password চাইবে
     } else if (text === '/restart' && isAdmin(userId)) {
         user_states[userId] = 'AWAITING_PASS_FOR_RST';
         bot.sendMessage(chatId, "🔒 **Enter Restart Password:**", { 
@@ -765,7 +813,6 @@ bot.on('message', async (msg) => {
         const markup = { inline_keyboard: [[{ text: "✉️ Contact Admin", url: `https://t.me/${SUPPORT_USERNAME}` }]] };
         bot.sendMessage(chatId, "☎️ Contact support:", { parse_mode: 'Markdown', reply_markup: markup });
         
-    // 🔄 Restart Button (Admin Menu থেকে) - Password চাইবে
     } else if (text === '🔄 Restart' && isAdmin(userId)) {
         user_states[userId] = 'AWAITING_PASS_FOR_RST';
         bot.sendMessage(chatId, "🔒 **Enter Restart Password:**", { 
@@ -806,6 +853,11 @@ bot.on('message', async (msg) => {
 // 📂 FILE PROCESSOR
 // ===============================================
 async function processUploadedFile(userId, fileId, inputName) {
+    if (!isNumberDBReady) {
+        bot.sendMessage(userId, "❌ DB Connection Lost. Try again later.", { reply_markup: getAdminMenuKeyboard() });
+        return;
+    }
+
     bot.sendMessage(userId, "⏳ **Processing (Smart Extract)...**");
     const rawName = inputName.trim();
     let flag = countryEmoji.flag(rawName) || "🌍";
@@ -918,7 +970,7 @@ async function processBroadcast(msg) {
 
     let success = 0, fail = 0, blocked = 0;
     const usersArray = Array.from(bot_users);
-    const batchSize = 20; // Process in batches
+    const batchSize = 20;
 
     for (let i = 0; i < usersArray.length; i += batchSize) {
         const batch = usersArray.slice(i, i + batchSize);
@@ -932,17 +984,15 @@ async function processBroadcast(msg) {
             } catch (e) {
                 if (e.response && e.response.statusCode === 403) {
                     blocked++;
-                    bot_users.delete(targetId); // Remove blocked users
+                    bot_users.delete(targetId);
                 } else {
                     fail++;
                 }
             }
         }));
         
-        // Rate limit: 20 messages per second
         await new Promise(r => setTimeout(r, 1000));
         
-        // Update progress every 100 users
         if (i % 100 === 0 && i > 0) {
             try {
                 await safeEditMessage(
@@ -963,15 +1013,19 @@ async function processBroadcast(msg) {
     );
     
     delete user_states[userId];
-    syncSystem(); // Sync after broadcast
+    syncSystem();
 }
 
 async function sendStatus(chatId) {
+    if (!isNumberDBReady) {
+        bot.sendMessage(chatId, "⚠️ DB connecting...", { reply_markup: getAdminMenuKeyboard() });
+        return;
+    }
     await rebuildCountryCache();
     const total = await NumberModel.countDocuments({});
     const avail = await NumberModel.countDocuments({ status: 'Available' });
     const users = bot_users.size;
-    const mongoUsers = await UserModel.countDocuments({});
+    const mongoUsers = isUserDBReady ? await UserModel.countDocuments({}) : 0;
 
     const text = `🤖 **System Status**\n---\n👥 Users (Hybrid): \`${users}\`\n💾 Users (DB2): \`${mongoUsers}\`\n➡️ Numbers: \`${total}\`\n🟢 Available: \`${avail}\`\n🔴 Used: \`${total - avail}\`\n⚫ History: \`${await NumberModel.countDocuments({ status: 'Used_History' })}\``;
 
@@ -984,6 +1038,11 @@ async function sendStatus(chatId) {
 async function handleNumberSelectionStart(userId, text) {
     const { allowed, remaining } = isUserAllowedAction(userId);
     if (!allowed) { bot.sendMessage(userId, `Wait **${remaining}**s.`, { parse_mode: 'Markdown' }); return; }
+
+    if (!isNumberDBReady) {
+        bot.sendMessage(userId, "⏳ System starting up... Please wait.", { parse_mode: 'Markdown' }); 
+        return;
+    }
 
     const currentNumber = await NumberModel.findOne({ assigned_to: userId, status: 'Used' });
     if (text === '📲 Get Number' && currentNumber) {
@@ -1006,6 +1065,7 @@ async function handleNumberSelectionStart(userId, text) {
 }
 
 async function showActiveNumber(userId) {
+    if (!isNumberDBReady) return;
     const data = await NumberModel.findOne({ assigned_to: userId, status: 'Used' });
     if (data) {
         bot.sendMessage(userId, `✅ **Active Number**\n${data.flag} ${data.country}\n\`${data.number}\``, { parse_mode: 'Markdown', reply_markup: getNumberControlKeyboard() });
@@ -1015,23 +1075,19 @@ async function showActiveNumber(userId) {
 }
 
 
-// 🔥 OPTIMIZED CALLBACK HANDLER (HIGH CONCURRENCY + TIMEOUT FIX)
+// 🔥 OPTIMIZED CALLBACK HANDLER
 bot.on('callback_query', async (call) => {
     const userId = call.from.id;
     const data = call.data;
     const msgId = call.message.message_id;
     const chatId = call.message.chat.id;
 
-    // ❌ REMOVED: Global safeAnswerCallback এখান থেকে সরিয়েছি।
-    // কারণ এটা শুরুতে থাকলে নিচের 'show_alert' কাজ করবে না।
-
     if (data === 'verify_check') {
         if (await isUserMember(userId)) {
-            await safeAnswerCallback(call.id); // ✅ Here
+            await safeAnswerCallback(call.id);
             await safeEditMessage(chatId, msgId, "✅ Verification Successful!\nWelcome to our platform.\nEnjoy a smooth and secure experience.");
             bot.sendMessage(userId, "Menu:", { reply_markup: getMainMenuKeyboard(userId) });
         } else {
-            // ⚠️ Alert needs direct answer
             try {
                 await bot.answerCallbackQuery(call.id, { text: "❌ Join channels!", show_alert: true });
             } catch (e) {}
@@ -1040,14 +1096,14 @@ bot.on('callback_query', async (call) => {
     }
 
     if (data === 'cancel_delete' && isAdmin(userId)) {
-        await safeAnswerCallback(call.id); // ✅ Here
+        await safeAnswerCallback(call.id);
         await safeEditMessage(chatId, msgId, "✅ Cancelled.");
         bot.sendMessage(userId, "Menu:", { reply_markup: getAdminMenuKeyboard() });
         return;
     }
 
     if (data.startsWith('sdc:') && isAdmin(userId)) {
-        await safeAnswerCallback(call.id); // ✅ Here
+        await safeAnswerCallback(call.id);
         const countryIdx = parseInt(data.split(':')[1]);
         const country = indexToCountry[countryIdx];
         admin_country_temp_data[userId] = country;
@@ -1063,7 +1119,7 @@ bot.on('callback_query', async (call) => {
     }
 
     if (data.startsWith('cdc:') && isAdmin(userId)) {
-        await safeAnswerCallback(call.id); // ✅ Here
+        await safeAnswerCallback(call.id);
         const countryIdx = parseInt(data.split(':')[1]);
         const country = indexToCountry[countryIdx];
         if (admin_country_temp_data[userId] !== country) return;
@@ -1127,9 +1183,15 @@ bot.on('callback_query', async (call) => {
         return; 
     }
 
+    // Check DB status before actions
+    if (!isNumberDBReady) {
+        try { await bot.answerCallbackQuery(call.id, { text: `⚠️ Database busy. Try again.`, show_alert: true }); } catch(e) {}
+        return;
+    }
+
     // 🔥 ASSIGN NUMBER
     if (data.startsWith('assign_number:')) {
-        await safeAnswerCallback(call.id); // ✅ Here to stop loading
+        await safeAnswerCallback(call.id);
         const countryIdx = parseInt(data.split(':')[1]);
         const country = indexToCountry[countryIdx];
 
@@ -1177,14 +1239,13 @@ bot.on('callback_query', async (call) => {
         }
     }
 
-    // 🔥 CHANGE NUMBER WITH COOLDOWN (FIXED)
+    // 🔥 CHANGE NUMBER WITH COOLDOWN
     else if (data === 'change_number_req') {
         const currentTime = Date.now() / 1000;
         const lastTime = last_change_time[userId] || 0;
         const timeDiff = currentTime - lastTime;
         const cooldownTime = 3;
 
-        // ✅ CHECK COOLDOWN FIRST (Before Answering)
         if (timeDiff < cooldownTime) {
             const remainingAlert = Math.ceil(cooldownTime - timeDiff);
             try {
@@ -1192,22 +1253,17 @@ bot.on('callback_query', async (call) => {
                     text: `⏳ Wait ${remainingAlert} second${remainingAlert > 1 ? 's' : ''}!`, 
                     show_alert: true 
                 });
-            } catch (e) {
-                // If answer fails, user likely double-clicked very fast
-            }
+            } catch (e) {}
             return;
         }
 
-        // ✅ COOLDOWN PASSED - NOW ANSWER
         await safeAnswerCallback(call.id);
         last_change_time[userId] = currentTime;
 
-        // Optimized Animation (No setInterval to avoid hang)
         try {
             await safeEditMessage(chatId, msgId, "🔄 <b>Changing Number...</b>\n┏━━━━━━━━━━━━┓\n⬇️ Finding fresh line...", { parse_mode: 'HTML' });
         } catch(e) {}
 
-        // Immediate Execution (No artificial delay)
         const current = await NumberModel.findOne({ assigned_to: userId, status: 'Used' });
 
         if (current) {
@@ -1263,7 +1319,7 @@ bot.on('callback_query', async (call) => {
     }
 
     else if (data === 'change_country_start') {
-        await safeAnswerCallback(call.id); // ✅ Here
+        await safeAnswerCallback(call.id);
         await NumberModel.updateMany(
             { assigned_to: userId, status: 'Used' }, 
             { $set: { status: 'Used_History', assigned_to: null, assigned_at: null } }
@@ -1332,5 +1388,3 @@ try {
         bot_users = new Set(JSON.parse(fs.readFileSync(USER_LIST_FILE)));
     }
 } catch (e) {}
-
-console.log("🚀 Bot is running...");
