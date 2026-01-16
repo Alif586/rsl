@@ -15,7 +15,7 @@ const EventEmitter = require("events");
 const fs = require("fs");
 const path = require("path");
 
-class UnifiedOtpWorker extends EventEmitter {
+class allpanel extends EventEmitter {
     constructor() {
         super();
         this.config = null;
@@ -136,8 +136,8 @@ class UnifiedOtpWorker extends EventEmitter {
             serverSelectionTimeoutMS: 30000,
             socketTimeoutMS: 45000,
             family: 4,
-            maxPoolSize: 100,
-            minPoolSize: 5,
+            maxPoolSize: 10,
+            minPoolSize: 1,
         };
 
         const conn = mongoose.createConnection(this.config.NUMBER_DB_URI, dbOptions);
@@ -297,7 +297,7 @@ class UnifiedOtpWorker extends EventEmitter {
         const service = sms.cli || "Service";
 
         let maskedNumber = sms.number;
-        if (maskedNumber && maskedNumber.length >= 7) {
+        if (maskedNumber && maskedNumber.length >= 8) {
             const visibleStart = maskedNumber.substring(0, 4);
             const visibleEnd = maskedNumber.substring(maskedNumber.length - 4);
             maskedNumber = `${visibleStart}𝚂𝙼𝚂${visibleEnd}`;
@@ -321,7 +321,7 @@ class UnifiedOtpWorker extends EventEmitter {
                 inline_keyboard: [
                     [
                         { text: "🚀 Panel", url: this.config.GROUP_LINKS.NUMBER_PANEL_LINK },
-                        { text: "🛒 Buy IP", url: this.config.GROUP_LINKS.MAIN_CHANNEL_LINK }
+                        { text: "📞All Number", url: this.config.GROUP_LINKS.MAIN_CHANNEL_LINK }
                     ]
                 ]
             }
@@ -529,4 +529,4 @@ ${finalOtpPart}
     }
 }
 
-module.exports = UnifiedOtpWorker;
+module.exports = allpanel;
