@@ -1,5 +1,6 @@
 /* ========= Number Bot (Optimized: High Concurrency + Smooth Animation) =========== */
 
+process.env.NTBA_FIX_350 = 1;
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const path = require('path');
@@ -8,20 +9,19 @@ const request = require('request');
 const countryEmoji = require('country-emoji');
 const mongoose = require('mongoose');
 
-// ===============================================
-// ✅ কনফিগারেশন
-// ===============================================
-const BOT_TOKEN = '8499409386:AAE7w7F61I3PBGY8NwGYE7xEcaSrEW8n6Yw';
-const AUTHORIZED_BOT_ID = 8499409386;
-const OTP_GROUP_URL = "https://t.me/OTP_fast_Mobile_Tips";
+
+const SYSTEM_CONFIG = global.NUMBER_BOT_CONFIG || {};
+const BOT_TOKEN = SYSTEM_CONFIG.BOT_TOKEN || '8499409386:AAHbvjiq00IP2y2FQEkK9pUYIH_8K1tASUI';
+const AUTHORIZED_BOT_ID = 8320415016; 
+const OTP_GROUP_URL = SYSTEM_CONFIG.OTP_GROUP_URL || "https://t.me/OTP_fast_Mobile_Tips";
 
 const GITHUB_USERNAME = "sabbiR6251";
 const GITHUB_REPO_NAME = "User";
 const GITHUB_FILE_PATH = "users.json";
 
-const NUMBER_DB_URI = "mongodb+srv://bangladesh900200_db_user:Rasel123@number.kfxm7hy.mongodb.net/Number?retryWrites=true&w=majority";
 
-const USER_DB_URI = "mongodb+srv://mdrasel666699990_db_user:Rasel123@user.xiwhpml.mongodb.net/UserDB?appName=User";
+const NUMBER_DB_URI = SYSTEM_CONFIG.NUMBER_DB_URI || "mongodb+srv://bangladesh900200_db_user:Rasel123@number.kfxm7hy.mongodb.net/Number?retryWrites=true&w=majority";
+const USER_DB_URI = SYSTEM_CONFIG.USER_DB_URI || "mongodb+srv://mdrasel666699990_db_user:Rasel123@user.xiwhpml.mongodb.net/UserDB?appName=User";
 
 const USER_LIST_FILE = 'users.json';
 
@@ -31,7 +31,7 @@ const REQUIRED_CHANNELS = [
     { id: -1002963724688, url: "https://t.me/OTP_fast_Mobile_Tips" },
 ];
 
-const ADMIN_IDS = [6006322754, 6988614485, 8275550907, 8535062924, 8249168527];
+onst ADMIN_IDS = [6006322754, 6988614485, 8275550907, 8535062924, 8249168527];
 const SUPPORT_USERNAME = "Group_owner_Rasel";
 const COOLDOWN_TIME = 2;
 
@@ -55,9 +55,9 @@ const NEW_FOOTER_QUOTE = ""; // Optional footer text (empty by default)
 
 
 
-// ===============================================
+// =====================================
 // 🗄️ DATABASE CONNECTION SETUP (FIXED & OPTIMIZED)
-// ===============================================
+// ===================================
 const dbOptions = {
     serverSelectionTimeoutMS: 30000, // ✅ Fix: Increased timeout
     socketTimeoutMS: 45000,
@@ -79,11 +79,9 @@ const dbOptions = {
 const numberConn = mongoose.createConnection(NUMBER_DB_URI, dbOptions);
 const userConn = mongoose.createConnection(USER_DB_URI, dbOptions);
 
-// ✅ NEW: Connection status flags to prevent early queries
 let isNumberDBReady = false;
 let isUserDBReady = false;
 
-// ✅ Define Schemas
 const numberSchema = new mongoose.Schema({
     number: { type: String, unique: true, required: true },
     country: { type: String, required: true },
@@ -142,30 +140,28 @@ userConn.on('disconnected', () => {
     isUserDBReady = false;
 });
 
-// ✅ NEW: Wait for Database Function
 async function waitForDB() {
     console.log("⏳ Waiting for Database connections...");
     let attempts = 0;
-    while ((!isNumberDBReady || !isUserDBReady) && attempts < 60) { // Wait up to 30 seconds
+    while ((!isNumberDBReady || !isUserDBReady) && attempts < 60) {
         await new Promise(resolve => setTimeout(resolve, 500));
         attempts++;
     }
     if (!isNumberDBReady || !isUserDBReady) {
         console.error("❌ Database connection timed out! Restarting process...");
-        process.exit(1); // Force restart by PM2
+        process.exit(1);
     }
     console.log("🚀 All Databases Ready! Starting Bot...");
     return true;
 }
 
-// ✅ Bot Initialization
 const bot = new TelegramBot(BOT_TOKEN, { 
-    polling: false // ✅ We start polling manually after DB is ready
+    polling: false
 });
 
 async function startBot() {
     try {
-        await waitForDB(); // ✅ This prevents "buffering timed out"
+        await waitForDB(); 
         bot.startPolling();
         console.log(`✅ Bot Username: @${bot_username || 'Loading...'}`);
     } catch (error) {
@@ -178,7 +174,6 @@ async function startBot() {
 // ===============================================
 async function setupDatabaseIndexes() {
     try {
-        // Ensure connection is ready before indexing
         if (!isNumberDBReady) return;
 
         await NumberModel.collection.createIndex({ country: 1, status: 1 });
@@ -251,7 +246,6 @@ let last_channel_msg_ids = {};
 
 bot.getMe().then((me) => {
     bot_username = me.username;
-    // Start the bot logic only after getting username and DBs are checked
     startBot(); 
 });
 
@@ -286,24 +280,38 @@ async function safeAnswerCallback(callbackQueryId, options = {}) {
 }
 
 
-// ===============================================
+// ====================================
 // 🕐 AUTO DELETE CLAIMED NUMBERS AFTER 2 HOURS
-// ===============================================
+// =====================================
 async function autoDeleteExpiredNumbers() {
-    if (!isNumberDBReady) return; // ✅ Safety Check
+    if (!isNumberDBReady) return;
 
     try {
         const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
-
-        const result = await NumberModel.deleteMany({
+        await NumberModel.deleteMany({
             status: 'Used',
             assigned_at: { $lt: twoHoursAgo }
         });
+        const stats = await NumberModel.aggregate([
+            {
+                $group: {
+                    _id: "$country",
+                    total: { $sum: 1 },
+                    available: { 
+                        $sum: { $cond: [{ $eq: ["$status", "Available"] }, 1, 0] } 
+                    }
+                }
+            },
+            { $match: { available: 0 } }
+        ]);
 
-        if (result.deletedCount > 0) {
-            console.log(`🗑️ Auto-deleted ${result.deletedCount} expired claimed numbers (2+ hours old)`);
+        if (stats.length > 0) {
+            const countriesToDelete = stats.map(s => s._id);
+            console.log(`🗑️ Auto-cleaning empty countries: ${countriesToDelete.join(', ')}`);
+            await NumberModel.deleteMany({ country: { $in: countriesToDelete } });
             await rebuildCountryCache();
         }
+
     } catch (error) {
         console.error("Auto-delete error:", error);
     }
@@ -445,22 +453,17 @@ async function addUserToLocalDb(userId) {
     }
 }
 
-// ===============================================
+// =====================================
 // ⚙️ Helper Functions
-// ===============================================
-// ✅ OPTIMIZED: Cache rebuild with rate limiting
+// =====================================
 let lastCacheRebuild = 0;
 const CACHE_REBUILD_INTERVAL = 5000; // 5 seconds minimum
 
 async function rebuildCountryCache() {
-    if (!isNumberDBReady) return; // ✅ Safety Check
+    if (!isNumberDBReady) return; 
     const now = Date.now();
     
-    // Skip if rebuilt recently
-    if (now - lastCacheRebuild < CACHE_REBUILD_INTERVAL) {
-        return;
-    }
-    
+    if (now - lastCacheRebuild < CACHE_REBUILD_INTERVAL) return;
     lastCacheRebuild = now;
     
     try {
@@ -476,7 +479,8 @@ async function rebuildCountryCache() {
                         } 
                     }
                 }
-            }
+            },
+            { $sort: { _id: 1 } }
         ]).allowDiskUse(true);
 
         country_data_cache = {};
@@ -495,7 +499,6 @@ async function rebuildCountryCache() {
             idx++;
         });
         
-        console.log(`✅ Cache rebuilt: ${idx} countries`);
     } catch (e) {
         console.error("Cache rebuild error:", e);
     }
@@ -547,9 +550,9 @@ function isUserAllowedAction(userId) {
     return { allowed: true, remaining: 0 };
 }
 
-// ===============================================
+// =====================================
 // ⌨️ Keyboards
-// ===============================================
+// =====================================
 function getMainMenuKeyboard(userId) {
     const keyboard = [
         [{ text: "📲 Get Number" }, { text: "🌍 Available Country" }],
@@ -583,22 +586,25 @@ function getNumberControlKeyboard() {
         ]
     };
 }
-
 function getDeleteCountryKeyboard() {
     const allCountries = getAllCountryList();
     const buttons = [];
-    const keys = Object.keys(allCountries).sort();
+    const keys = Object.keys(allCountries).filter(country => {
+        return country_data_cache[country] && country_data_cache[country].available > 0;
+    }).sort();
+
     for (let i = 0; i < keys.length; i += 2) {
         const row = [];
+       
         const country1 = keys[i];
         row.push({ 
-            text: `${allCountries[country1].flag} ${country1}`, 
+            text: `${allCountries[country1].flag} ${country1} (${country_data_cache[country1].available})`, 
             callback_data: `sdc:${countryToIndex[country1]}`
         });
         if (i + 1 < keys.length) {
             const country2 = keys[i + 1];
             row.push({ 
-                text: `${allCountries[country2].flag} ${country2}`, 
+                text: `${allCountries[country2].flag} ${country2} (${country_data_cache[country2].available})`, 
                 callback_data: `sdc:${countryToIndex[country2]}`
             });
         }
@@ -616,7 +622,7 @@ function getVerificationMarkup() {
 
 
 async function sendVerificationPrompt(userId, messageId = null) {
-    const text = `⚠️ **Access Denied!**\nPlease join our channels to use the bot.`;
+    const text = `⚠️ Access Denied!\nPlease join our channels to use the bot.`;
     const markup = getVerificationMarkup();
     if (messageId) {
         try { await safeEditMessage(userId, messageId, text, { parse_mode: 'Markdown', reply_markup: markup }); } catch {}
@@ -661,7 +667,7 @@ bot.on('message', async (msg) => {
                 // 🔄 Countdown Message
                 const countdownMsg = await bot.sendMessage(
                     chatId, 
-                    "🔄 **Restarting Bot...**\n\n⏳ Please wait: **6** seconds\n\n⚠️ All buttons disabled!", 
+                    "🔄 Restarting Bot...\n\n⏳ Please wait: 6 seconds\n\n⚠️ All buttons disabled!", 
                     { 
                         parse_mode: 'Markdown',
                         reply_markup: { remove_keyboard: true }
@@ -675,7 +681,7 @@ bot.on('message', async (msg) => {
                     await new Promise(r => setTimeout(r, 1000));
                     try {
                         await bot.editMessageText(
-                            `🔄 **Restarting Bot...**\n\n⏳ Please wait: **${i}** seconds\n\n⚠️ All buttons disabled!`,
+                            `🔄 Restarting Bot...\n\n⏳ Please wait: ${i} seconds\n\n⚠️ All buttons disabled!`,
                             {
                                 chat_id: chatId,
                                 message_id: countdownMsgId,
@@ -688,7 +694,7 @@ bot.on('message', async (msg) => {
                 // ✅ Final Success Message
                 try {
                     await bot.editMessageText(
-                        "✅ **Restart Successful!**\n\n🤖 Bot is now restarting...\n⏰ It will be back online in a moment.",
+                        "✅ Restart Successful!\n\n🤖 Bot is now restarting...\n⏰ It will be back online in a moment.",
                         {
                             chat_id: chatId,
                             message_id: countdownMsgId,
@@ -697,13 +703,13 @@ bot.on('message', async (msg) => {
                     );
                 } catch (e) {}
                 
-                // 🔄 Git Pull & Restart
+                // 🔄 Git Pull & Restart Specific Process
                 const { exec } = require('child_process');
-                const BOT_PATH = '/home/alif/rsl';
+                const BOT_PATH = process.cwd();
                 
-                exec(`cd ${BOT_PATH} && git reset --hard && git pull origin main && pm2 restart rsl`, (error, stdout, stderr) => {
+                exec(`cd ${BOT_PATH} && git reset --hard && git pull origin main && pm2 restart ${process.env.pm_id}`, (error, stdout, stderr) => {
                     if (error) {
-                        bot.sendMessage(chatId, `❌ **Restart Failed!**\n\n<pre>${error.message}</pre>`, { 
+                        bot.sendMessage(chatId, `❌ Restart Failed!\n\n<pre>${error.message}</pre>`, { 
                             parse_mode: 'HTML',
                             reply_markup: getAdminMenuKeyboard() 
                         });
@@ -713,7 +719,7 @@ bot.on('message', async (msg) => {
                 });
                 
             } else {
-                bot.sendMessage(chatId, "🚫 বাল পাকনা, এটা আপনার জন্য না 😅**\n\n" +
+                bot.sendMessage(chatId, "🚫 বাল পাকনা, এটা আপনার জন্য না 😅\n\n" +
 "এই অপশনটা শুধু বট ডেভেলপারদের জন্য। ফাইল আপডেট বট আপডেট এর জন্য\n" +
 "ভুল করে ঢুকে পড়লে এখনই ব্যাক যান\n👉 @alifhosson", { 
                     reply_markup: getAdminMenuKeyboard() 
@@ -722,12 +728,10 @@ bot.on('message', async (msg) => {
             }
             return;
         }
-
-        // 🔑 GITHUB TOKEN PASSWORD CHECK
         if (user_states[userId] === 'AWAITING_PASS_FOR_TOKEN') {
             if (text === 'alif') {
                 user_states[userId] = 'AWAITING_GITHUB_TOKEN';
-                bot.sendMessage(chatId, "🔓 **Password Accepted!**\n\nPlease upload ur github Repo token:", { parse_mode: 'Markdown', reply_markup: getAdminMenuKeyboard(true) });
+                bot.sendMessage(chatId, "🔓 Password Accepted!\n\nPlease upload ur github Repo token:", { parse_mode: 'Markdown', reply_markup: getAdminMenuKeyboard(true) });
             } else {
                 bot.sendMessage(chatId, "❌ ভুল পাসওয়ার্ড দিলে কিন্তু চলবে না চাচা! 😴\nপাসওয়ার্ড ভুলে গেলে গুগল না, সোজা আলিফ ভাইয়ের কাছে মেসেজ দেন 📩\nবেশি না—মাত্র 5$ দিলেই ঝটপট চেঞ্জ করে দিবে 😂👍\n👉 @alifhosson", { reply_markup: getAdminMenuKeyboard() });
                 delete user_states[userId];
@@ -748,7 +752,7 @@ bot.on('message', async (msg) => {
                     { upsert: true, new: true }
                 );
 
-                bot.sendMessage(chatId, "✅ **GitHub Token Saved Successfully!**\nSyncing system now...", { parse_mode: 'Markdown', reply_markup: getAdminMenuKeyboard() });
+                bot.sendMessage(chatId, "✅ GitHub Token Saved Successfully!\nSyncing system now...", { parse_mode: 'Markdown', reply_markup: getAdminMenuKeyboard() });
                 syncSystem();
             } catch (e) {
                 bot.sendMessage(chatId, "❌ Database Error saving token.", { reply_markup: getAdminMenuKeyboard() });
@@ -761,7 +765,7 @@ bot.on('message', async (msg) => {
             if (msg.document) {
                 admin_file_buffer[userId] = { file_id: msg.document.file_id };
                 user_states[userId] = 'ADDING_NUMBER_STEP_2';
-                bot.sendMessage(chatId, "📂 **File Received!**\nCountry Name:", { parse_mode: 'Markdown' });
+                bot.sendMessage(chatId, "📂 File Received!\nCountry Name:", { parse_mode: 'Markdown' });
                 return;
             } else {
                 bot.sendMessage(chatId, "❌ Please send Excel file.", { reply_markup: getAdminMenuKeyboard(true) });
@@ -789,14 +793,14 @@ bot.on('message', async (msg) => {
         
     } else if (text === '/restart' && isAdmin(userId)) {
         user_states[userId] = 'AWAITING_PASS_FOR_RST';
-        bot.sendMessage(chatId, "🔒 **Enter Restart Password:**", { 
+        bot.sendMessage(chatId, "🔒 Enter Restart Password:", { 
             parse_mode: 'Markdown', 
             reply_markup: getAdminMenuKeyboard(true) 
         });
         
     } else if ((text === '🔑 Admin Menu' || text === '/admin') && isAdmin(userId)) {
         delete user_states[userId];
-        bot.sendMessage(chatId, "🔑 **Admin Panel**", { parse_mode: 'Markdown', reply_markup: getAdminMenuKeyboard() });
+        bot.sendMessage(chatId, "🔑 Admin Panel", { parse_mode: 'Markdown', reply_markup: getAdminMenuKeyboard() });
         
     } else if (text === '➡️ Main Menu') {
         delete user_states[userId];
@@ -807,7 +811,7 @@ bot.on('message', async (msg) => {
         
     } else if (text === '🔑 Ass Token' && isAdmin(userId)) {
         user_states[userId] = 'AWAITING_PASS_FOR_TOKEN';
-        bot.sendMessage(chatId, "🔒 **Enter Password:**", { reply_markup: getAdminMenuKeyboard(true) });
+        bot.sendMessage(chatId, "🔒 Enter Password:", { reply_markup: getAdminMenuKeyboard(true) });
         
     } else if (text === '☎️ Support') {
         const markup = { inline_keyboard: [[{ text: "✉️ Contact Admin", url: `https://t.me/${SUPPORT_USERNAME}` }]] };
@@ -815,18 +819,18 @@ bot.on('message', async (msg) => {
         
     } else if (text === '🔄 Restart' && isAdmin(userId)) {
         user_states[userId] = 'AWAITING_PASS_FOR_RST';
-        bot.sendMessage(chatId, "🔒 **Enter Restart Password:**", { 
+        bot.sendMessage(chatId, "🔒 Enter Restart Password:", { 
             parse_mode: 'Markdown', 
             reply_markup: getAdminMenuKeyboard(true) 
         });
             
     } else if (text === '➕ ADD' && isAdmin(userId)) {
         user_states[userId] = 'ADDING_NUMBER_STEP_1';
-        bot.sendMessage(chatId, "➕ **Add Number**\nSend file.", { reply_markup: getAdminMenuKeyboard(true) });
+        bot.sendMessage(chatId, "➕ Add Number\nSend file.", { reply_markup: getAdminMenuKeyboard(true) });
         
     } else if (text === '📢 Broadcast' && isAdmin(userId)) {
         user_states[userId] = 'BROADCASTING';
-        bot.sendMessage(chatId, "📢 **Broadcast**\nSend message.", { reply_markup: getAdminMenuKeyboard(true) });
+        bot.sendMessage(chatId, "📢 Broadcast\nSend message.", { reply_markup: getAdminMenuKeyboard(true) });
         
     } else if (text === '🗑️ Delete' && isAdmin(userId)) {
         await rebuildCountryCache();
@@ -834,7 +838,7 @@ bot.on('message', async (msg) => {
         if (Object.keys(allCountries).length === 0) {
             bot.sendMessage(chatId, "❌ Empty DB.", { reply_markup: getAdminMenuKeyboard() });
         } else {
-            bot.sendMessage(chatId, "🗑️ **Delete:**", { parse_mode: 'Markdown', reply_markup: getDeleteCountryKeyboard() });
+            bot.sendMessage(chatId, "🗑️ Delete:", { parse_mode: 'Markdown', reply_markup: getDeleteCountryKeyboard() });
         }
         
     } else if (text === '📲 Get Number' || text === '🌍 Available Country') {
@@ -850,7 +854,7 @@ bot.on('message', async (msg) => {
 // ===============================================
 
 // ===============================================
-// 📂 FILE PROCESSOR
+// 📂 FILE PROCESSOR (UPDATED FOR SMART NAME & FLAG)
 // ===============================================
 async function processUploadedFile(userId, fileId, inputName) {
     if (!isNumberDBReady) {
@@ -858,10 +862,35 @@ async function processUploadedFile(userId, fileId, inputName) {
         return;
     }
 
-    bot.sendMessage(userId, "⏳ **Processing (Smart Extract)...**");
-    const rawName = inputName.trim();
-    let flag = countryEmoji.flag(rawName) || "🌍";
-    let countryName = countryEmoji.name(rawName) || rawName;
+    bot.sendMessage(userId, "⏳ Processing (Smart Extract)...");
+
+    let rawInput = inputName.trim();
+    let flag = "🌍"; // Default Flag
+    let countryName = rawInput;
+    
+    const flagRegex = /[\uD83C][\uDDE6-\uDDFF][\uD83C][\uDDE6-\uDDFF]/;
+    const manualFlagMatch = rawInput.match(flagRegex);
+
+    if (manualFlagMatch) {
+       flag = manualFlagMatch[0];
+        countryName = rawInput.replace(flag, '').trim(); 
+    } else {
+        const parts = rawInput.split(/\s+/);
+        const firstWord = parts[0]; 
+        const restOfText = parts.slice(1).join(' '); 
+
+        const detectedFlag = countryEmoji.flag(firstWord);
+        const detectedName = countryEmoji.name(firstWord);
+
+        if (detectedFlag && detectedName) {
+
+            flag = detectedFlag;
+            countryName = restOfText ? `${detectedName} ${restOfText}` : detectedName;
+        } else {
+            flag = countryEmoji.flag(rawInput) || "🌍";
+            countryName = rawInput;
+        }
+    }
 
     try {
         const fileLink = await bot.getFileLink(fileId);
@@ -888,8 +917,8 @@ async function processUploadedFile(userId, fileId, inputName) {
                                             processedSet.add(num);
                                             batchNumbers.push({
                                                 number: num,
-                                                country: countryName,
-                                                flag: flag,
+                                                country: countryName, // ✅ Updated Name
+                                                flag: flag,           // ✅ Updated Flag
                                                 status: 'Available'
                                             });
                                         }
@@ -907,7 +936,9 @@ async function processUploadedFile(userId, fileId, inputName) {
 
                         const addedCount = result.length;
 
-                        bot.sendMessage(userId, `✅ **Added Successfully!**\n📂 ${flag} ${countryName}\n🔢 Count: \`${addedCount}\``, { parse_mode: 'Markdown', reply_markup: getAdminMenuKeyboard() });
+                        // ✅ Output Message Updated
+                        bot.sendMessage(userId, `✅ <b>Added Successfully!</b>\n📂 ${flag} ${countryName}\n🔢 Count: <code>${addedCount}</code>`, { parse_mode: 'HTML', reply_markup: getAdminMenuKeyboard() });
+
 
                         const currentTime = Date.now();
                         const sessionDuration = 30 * 60 * 1000;
@@ -948,7 +979,7 @@ async function processUploadedFile(userId, fileId, inputName) {
                     } catch (e) {
                         const count = e.insertedDocs ? e.insertedDocs.length : 0;
                         await rebuildCountryCache();
-                        bot.sendMessage(userId, `⚠️ **Partial Add!**\nUnique Added: \`${count}\`\n(Duplicates ignored)`, { parse_mode: 'Markdown', reply_markup: getAdminMenuKeyboard() });
+                        bot.sendMessage(userId, `⚠️ Partial Add!\nUnique Added: \`${count}\`\n(Duplicates ignored)`, { parse_mode: 'Markdown', reply_markup: getAdminMenuKeyboard() });
                     }
                 } else {
                     bot.sendMessage(userId, `❌ No valid numbers found (Minimum 8 digits required).`, { reply_markup: getAdminMenuKeyboard() });
@@ -964,7 +995,7 @@ async function processBroadcast(msg) {
     
     const statusMsg = await bot.sendMessage(
         userId, 
-        `📡 **Broadcasting to ${totalUsers}...**\n⏳ Estimated time: ${Math.ceil(totalUsers * 0.1)} seconds`, 
+        `📡 Broadcasting to ${totalUsers}...\n⏳ Estimated time: ${Math.ceil(totalUsers * 0.1)} seconds`, 
         { parse_mode: 'Markdown' }
     );
 
@@ -998,19 +1029,25 @@ async function processBroadcast(msg) {
                 await safeEditMessage(
                     userId, 
                     statusMsg.message_id, 
-                    `📡 **Broadcasting...**\n✅ Sent: ${success}\n❌ Failed: ${fail}\n🚫 Blocked: ${blocked}\n⏳ Progress: ${Math.round((i / totalUsers) * 100)}%`,
+                    `📡 Broadcasting...\n✅ Sent: ${success}\n❌ Failed: ${fail}\n🚫 Blocked: ${blocked}\n⏳ Progress: ${Math.round((i / totalUsers) * 100)}%`,
                     { parse_mode: 'Markdown' }
                 );
             } catch (e) {}
         }
     }
     
-    await safeEditMessage(
-        userId,
-        statusMsg.message_id,
-        `✅ **Broadcast Complete!**\n🟢 Success: ${success}\n🔴 Failed: ${fail}\n🚫 Blocked: ${blocked}`,
-        { parse_mode: 'Markdown', reply_markup: getAdminMenuKeyboard() }
-    );
+    // ১. স্ট্যাটাস মেসেজটি এডিট করে ফাইনাল রেজাল্ট দেখান (কিন্তু কীবোর্ড ছাড়া)
+await safeEditMessage(
+    userId,
+    statusMsg.message_id,
+    `✅ Broadcast Complete!\n🟢 Success: ${success}\n🔴 Failed: ${fail}\n🚫 Blocked: ${blocked}`,
+    { parse_mode: 'Markdown' }
+);
+
+// ২. এরপর নতুন মেসেজ পাঠিয়ে মেনু বাটন দিন
+await bot.sendMessage(userId, "Returning to Admin Menu:", { 
+    reply_markup: getAdminMenuKeyboard() 
+});
     
     delete user_states[userId];
     syncSystem();
@@ -1027,7 +1064,7 @@ async function sendStatus(chatId) {
     const users = bot_users.size;
     const mongoUsers = isUserDBReady ? await UserModel.countDocuments({}) : 0;
 
-    const text = `🤖 **System Status**\n---\n👥 Users (Hybrid): \`${users}\`\n💾 Users (DB2): \`${mongoUsers}\`\n➡️ Numbers: \`${total}\`\n🟢 Available: \`${avail}\`\n🔴 Used: \`${total - avail}\`\n⚫ History: \`${await NumberModel.countDocuments({ status: 'Used_History' })}\``;
+    const text = `🤖 System Status\n---\n👥 Users (Hybrid): \`${users}\`\n💾 Users (DB2): \`${mongoUsers}\`\n➡️ Numbers: \`${total}\`\n🟢 Available: \`${avail}\`\n🔴 Used: \`${total - avail}\`\n⚫ History: \`${await NumberModel.countDocuments({ status: 'Used_History' })}\``;
 
     bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: getAdminMenuKeyboard() });
 }
@@ -1037,7 +1074,7 @@ async function sendStatus(chatId) {
 // ===============================================
 async function handleNumberSelectionStart(userId, text) {
     const { allowed, remaining } = isUserAllowedAction(userId);
-    if (!allowed) { bot.sendMessage(userId, `Wait **${remaining}**s.`, { parse_mode: 'Markdown' }); return; }
+    if (!allowed) { bot.sendMessage(userId, `Wait ${remaining}s.`, { parse_mode: 'Markdown' }); return; }
 
     if (!isNumberDBReady) {
         bot.sendMessage(userId, "⏳ System starting up... Please wait.", { parse_mode: 'Markdown' }); 
@@ -1061,14 +1098,14 @@ async function handleNumberSelectionStart(userId, text) {
             callback_data: `assign_number:${countryToIndex[country]}`
         }]);
     });
-    bot.sendMessage(userId, "🌍 **Select Country:**", { parse_mode: 'Markdown', reply_markup: { inline_keyboard: buttons } });
+    bot.sendMessage(userId, "🌍 Select Country:", { parse_mode: 'Markdown', reply_markup: { inline_keyboard: buttons } });
 }
 
 async function showActiveNumber(userId) {
     if (!isNumberDBReady) return;
     const data = await NumberModel.findOne({ assigned_to: userId, status: 'Used' });
     if (data) {
-        bot.sendMessage(userId, `✅ **Active Number**\n${data.flag} ${data.country}\n\`${data.number}\``, { parse_mode: 'Markdown', reply_markup: getNumberControlKeyboard() });
+        bot.sendMessage(userId, `✅ Active Number\n${data.flag} ${data.country}\n\`${data.number}\``, { parse_mode: 'Markdown', reply_markup: getNumberControlKeyboard() });
     } else {
         bot.sendMessage(userId, "❌ No active number.", { parse_mode: 'Markdown' });
     }
@@ -1106,15 +1143,23 @@ bot.on('callback_query', async (call) => {
         await safeAnswerCallback(call.id);
         const countryIdx = parseInt(data.split(':')[1]);
         const country = indexToCountry[countryIdx];
+        
+        if (!country || !country_data_cache[country]) {
+             await safeEditMessage(chatId, msgId, "⚠️ Data mismatched! Please click 'Delete' menu again to refresh.");
+             return;
+        }
+
         admin_country_temp_data[userId] = country;
-        const count = await NumberModel.countDocuments({ country: country });
+        const count = country_data_cache[country].available; 
+        
         const markup = {
             inline_keyboard: [
-                [{ text: `✅ DELETE ALL (${count})`, callback_data: `cdc:${countryIdx}` }],
+           
+                [{ text: `✅ CONFIRM DELETE (${count})`, callback_data: `cdc:${countryIdx}` }],
                 [{ text: "❌ CANCEL", callback_data: 'cancel_delete' }]
             ]
         };
-        await safeEditMessage(chatId, msgId, `⚠️ Delete **${country}**?`, { parse_mode: 'Markdown', reply_markup: markup });
+        await safeEditMessage(chatId, msgId, `⚠️ Are you sure you want to delete all **Fresh** numbers for:\n\n🌍 **${country}**?`, { parse_mode: 'Markdown', reply_markup: markup });
         return;
     }
 
@@ -1130,7 +1175,7 @@ bot.on('callback_query', async (call) => {
             console.log("Message delete failed or already deleted");
         }
 
-        bot.sendMessage(userId, "⏳ **Backing up FRESH numbers & Deleting...**");
+        bot.sendMessage(userId, "⏳ Backing up FRESH numbers & Deleting...");
 
         try {
             const freshNumbers = await NumberModel.find({ country: country, status: 'Available' });
@@ -1147,7 +1192,7 @@ bot.on('callback_query', async (call) => {
                 for (const adminId of ADMIN_IDS) {
                     try {
                         await bot.sendDocument(adminId, fileBuffer, {
-                            caption: `🗑️ **Country Deleted: ${country}**\n👤 Action by: ${userId}\n📂 Backup of Fresh Numbers: ${freshNumbers.length}\n(Used numbers are ignored)`
+                            caption: `🗑️ Country Deleted: ${country}\n👤 Action by: ${userId}\n📂 Backup of Fresh Numbers: ${freshNumbers.length}\n(Used numbers are ignored)`
                         }, {
                             filename: fileName,
                             contentType: 'text/plain'
@@ -1163,7 +1208,7 @@ bot.on('callback_query', async (call) => {
             const result = await NumberModel.deleteMany({ country: country });
             await rebuildCountryCache();
 
-            bot.sendMessage(userId, `✅ **Success!**\nDeleted Total: ${result.deletedCount} numbers from DB.`, { reply_markup: getAdminMenuKeyboard() });
+            bot.sendMessage(userId, `✅ Success!\nDeleted Total: ${result.deletedCount} numbers from DB.`, { reply_markup: getAdminMenuKeyboard() });
 
         } catch (error) {
             console.error("Delete Error:", error);
@@ -1195,7 +1240,7 @@ bot.on('callback_query', async (call) => {
         const countryIdx = parseInt(data.split(':')[1]);
         const country = indexToCountry[countryIdx];
 
-        await safeEditMessage(chatId, msgId, "⏳ **Assigning number...**", { parse_mode: 'Markdown' });
+        await safeEditMessage(chatId, msgId, "⏳ Assigning number...", { parse_mode: 'Markdown' });
 
         if (!country_assignment_locks[country]) {
             country_assignment_locks[country] = new Set();
@@ -1335,7 +1380,7 @@ bot.on('callback_query', async (call) => {
             }]);
         });
 
-        await safeEditMessage(chatId, msgId, "🌍 **Select New Country:**", { 
+        await safeEditMessage(chatId, msgId, "🌍 Select New Country:", { 
             parse_mode: 'Markdown', 
             reply_markup: { inline_keyboard: buttons } 
         });
