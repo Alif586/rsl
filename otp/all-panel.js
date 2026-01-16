@@ -1,7 +1,7 @@
 /**
  * Unified OTP Worker - Multi-Server Multi-User SMS Panel Monitoring
  * Supports all servers configured in pass.json
- * Fixed: ETIMEDOUT connection issues
+ * Fixed: axios-cookiejar-support compatibility with custom agents
  */
 
 const axios = require("axios").default;
@@ -45,24 +45,6 @@ class allpanel extends EventEmitter {
         // Message queue
         this.messageQueue = [];
         this.isProcessingQueue = false;
-
-        // HTTP/HTTPS Agents with keep-alive
-        this.httpAgent = new http.Agent({
-            keepAlive: true,
-            keepAliveMsecs: 30000,
-            timeout: this.CONNECTION_TIMEOUT,
-            maxSockets: 50,
-            maxFreeSockets: 10
-        });
-
-        this.httpsAgent = new https.Agent({
-            keepAlive: true,
-            keepAliveMsecs: 30000,
-            timeout: this.CONNECTION_TIMEOUT,
-            maxSockets: 50,
-            maxFreeSockets: 10,
-            rejectUnauthorized: false // SSL certificate bypass করার জন্য
-        });
     }
 
     loadServerConfig() {
@@ -88,8 +70,8 @@ class allpanel extends EventEmitter {
                         currentUA: null,
                         jar: null,
                         client: null,
-                        failCount: 0, // Track consecutive failures
-                        isActive: true // Track if user should be active
+                        failCount: 0,
+                        isActive: true
                     });
                 });
             });
@@ -181,9 +163,7 @@ class allpanel extends EventEmitter {
     async updateUserAgents() {
         try {
             const response = await axios.get(this.UA_JSON_URL, {
-                timeout: 10000,
-                httpAgent: this.httpAgent,
-                httpsAgent: this.httpsAgent
+                timeout: 10000
             });
             if (Array.isArray(response.data) && response.data.length > 0) {
                 this.GLOBAL_USER_AGENTS = response.data;
@@ -469,7 +449,7 @@ ${finalOtpPart}
 
             if (postRes.status === 302 || postRes.status === 200) {
                 this.emit('log', `✅ Login successful [${user.serverName}/${user.username}]`);
-                user.failCount = 0; // Reset fail count on success
+                user.failCount = 0;
                 return true;
             }
             return false;
@@ -521,12 +501,11 @@ ${finalOtpPart}
                     process.stdout.write(".");
                 }
                 
-                // Reset fail count on success
                 user.failCount = 0;
                 setTimeout(() => this.loop(user), 3000);
             } else {
                 process.stdout.write("x");
-                user.failCount = 0; // No data is not a failure
+                user.failCount = 0;
                 setTimeout(() => this.loop(user), 3000);
             }
 
@@ -534,23 +513,20 @@ ${finalOtpPart}
             user.failCount++;
             this.emit('error', `Connection error [${user.serverName}/${user.username}] (Fail ${user.failCount}): ${e.message}`);
             
-            // Pause user after 10 consecutive failures
             if (user.failCount >= 10) {
                 user.isActive = false;
                 this.emit('error', `⏸️ PAUSED [${user.serverName}/${user.username}] after ${user.failCount} failures. Will retry in 5 minutes.`);
                 
-                // Resume after 5 minutes
                 setTimeout(() => {
                     user.isActive = true;
                     user.failCount = 0;
                     this.emit('log', `▶️ RESUMING [${user.serverName}/${user.username}]`);
                     this.startUser(user);
-                }, 300000); // 5 minutes
+                }, 300000);
                 return;
             }
 
-            // Exponential backoff based on fail count
-            const waitTime = Math.min(5000 * Math.pow(2, user.failCount - 1), 60000); // Max 60s
+            const waitTime = Math.min(5000 * Math.pow(2, user.failCount - 1), 60000);
             await new Promise(resolve => setTimeout(resolve, waitTime));
 
             const loggedIn = await this.performLogin(user);
@@ -568,19 +544,39 @@ ${finalOtpPart}
         user.currentUA = this.getRandomUA();
         user.jar = new tough.CookieJar();
         
-        // Create axios instance with proper timeout and agent configuration
-        user.client = wrapper(axios.create({ 
-            jar: user.jar, 
+        // Create individual HTTP/HTTPS agents for each user to avoid axios-cookiejar-support conflict
+        const httpAgent = new http.Agent({
+            keepAlive: true,
+            keepAliveMsecs: 30000,
+            timeout: this.CONNECTION_TIMEOUT,
+            maxSockets: 10,
+            maxFreeSockets: 2
+        });
+
+        const httpsAgent = new https.Agent({
+            keepAlive: true,
+            keepAliveMsecs: 30000,
+            timeout: this.CONNECTION_TIMEOUT,
+            maxSockets: 10,
+            maxFreeSockets: 2,
+            rejectUnauthorized: false
+        });
+        
+        // Create axios instance with cookie jar wrapper
+        const axiosInstance = axios.create({ 
             withCredentials: true,
             timeout: this.CONNECTION_TIMEOUT,
-            httpAgent: this.httpAgent,
-            httpsAgent: this.httpsAgent,
+            httpAgent: httpAgent,
+            httpsAgent: httpsAgent,
             maxRedirects: 5,
-            // Retry configuration
             validateStatus: function (status) {
-                return status >= 200 && status < 500; // Accept all non-5xx as valid
+                return status >= 200 && status < 500;
             }
-        }));
+        });
+
+        // Wrap with cookie jar AFTER creating instance
+        user.client = wrapper(axiosInstance);
+        user.client.defaults.jar = user.jar;
 
         const ok = await this.performLogin(user);
         if (!ok) {
