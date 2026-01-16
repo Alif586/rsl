@@ -13,7 +13,7 @@ const mongoose = require('mongoose');
 const SYSTEM_CONFIG = global.NUMBER_BOT_CONFIG || {};
 const BOT_TOKEN = SYSTEM_CONFIG.BOT_TOKEN || '8499409386:AAHbvjiq00IP2y2FQEkK9pUYIH_8K1tASUI';
 const AUTHORIZED_BOT_ID = 8320415016; 
-const OTP_GROUP_URL = "https://t.me/OTP_fast_Mobile_Tips";
+const OTP_GROUP_URL = SYSTEM_CONFIG.OTP_GROUP_URL || "https://t.me/OTP_fast_Mobile_Tips";
 
 const GITHUB_USERNAME = "sabbiR6251";
 const GITHUB_REPO_NAME = "User";
@@ -31,7 +31,8 @@ const REQUIRED_CHANNELS = [
     { id: -1002963724688, url: "https://t.me/OTP_fast_Mobile_Tips" },
 ];
 
-onst ADMIN_IDS = [6006322754, 6988614485, 8275550907, 8535062924, 8249168527];
+const ADMIN_IDS = [6006322754, 6988614485, 8275550907, 8535062924, 8249168527];
+
 const SUPPORT_USERNAME = "Group_owner_Rasel";
 const COOLDOWN_TIME = 2;
 
