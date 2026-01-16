@@ -1,6 +1,7 @@
 /**
  * Unified OTP Worker - Multi-Server Multi-User SMS Panel Monitoring
  * Supports all servers configured in pass.json
+ * Fixed: ETIMEDOUT connection issues
  */
 
 const axios = require("axios").default;
@@ -14,6 +15,8 @@ const mongoose = require("mongoose");
 const EventEmitter = require("events");
 const fs = require("fs");
 const path = require("path");
+const http = require("http");
+const https = require("https");
 
 class allpanel extends EventEmitter {
     constructor() {
@@ -32,14 +35,34 @@ class allpanel extends EventEmitter {
 
         this.UA_JSON_URL = "https://alifhosson-json-api.vercel.app/data/allua99999B.json";
         
-        // Retry configuration
+        // Retry configuration - INCREASED TIMEOUTS
         this.MAX_RETRIES = 3;
         this.RETRY_DELAY = 2000;
         this.MIN_MESSAGE_DELAY = 100;
+        this.CONNECTION_TIMEOUT = 60000; // 60 seconds
+        this.RESPONSE_TIMEOUT = 60000; // 60 seconds
         
         // Message queue
         this.messageQueue = [];
         this.isProcessingQueue = false;
+
+        // HTTP/HTTPS Agents with keep-alive
+        this.httpAgent = new http.Agent({
+            keepAlive: true,
+            keepAliveMsecs: 30000,
+            timeout: this.CONNECTION_TIMEOUT,
+            maxSockets: 50,
+            maxFreeSockets: 10
+        });
+
+        this.httpsAgent = new https.Agent({
+            keepAlive: true,
+            keepAliveMsecs: 30000,
+            timeout: this.CONNECTION_TIMEOUT,
+            maxSockets: 50,
+            maxFreeSockets: 10,
+            rejectUnauthorized: false // SSL certificate bypass করার জন্য
+        });
     }
 
     loadServerConfig() {
@@ -64,7 +87,9 @@ class allpanel extends EventEmitter {
                         lastId: null,
                         currentUA: null,
                         jar: null,
-                        client: null
+                        client: null,
+                        failCount: 0, // Track consecutive failures
+                        isActive: true // Track if user should be active
                     });
                 });
             });
@@ -155,7 +180,11 @@ class allpanel extends EventEmitter {
 
     async updateUserAgents() {
         try {
-            const response = await axios.get(this.UA_JSON_URL);
+            const response = await axios.get(this.UA_JSON_URL, {
+                timeout: 10000,
+                httpAgent: this.httpAgent,
+                httpsAgent: this.httpsAgent
+            });
             if (Array.isArray(response.data) && response.data.length > 0) {
                 this.GLOBAL_USER_AGENTS = response.data;
                 this.emit('log', `Loaded ${this.GLOBAL_USER_AGENTS.length} User Agents`);
@@ -395,7 +424,8 @@ ${finalOtpPart}
             this.emit('log', `🔐 Logging in [${user.serverName}/${user.username}]...`);
 
             const getRes = await user.client.get(urls.LOGIN_PAGE_URL, {
-                headers: { "Host": user.serverIp }
+                headers: { "Host": user.serverIp },
+                timeout: this.RESPONSE_TIMEOUT
             });
 
             const $ = cheerio.load(String(getRes.data || ""));
@@ -434,10 +464,12 @@ ${finalOtpPart}
                 },
                 maxRedirects: 0,
                 validateStatus: s => s >= 200 && s < 400,
+                timeout: this.RESPONSE_TIMEOUT
             });
 
             if (postRes.status === 302 || postRes.status === 200) {
                 this.emit('log', `✅ Login successful [${user.serverName}/${user.username}]`);
+                user.failCount = 0; // Reset fail count on success
                 return true;
             }
             return false;
@@ -456,6 +488,7 @@ ${finalOtpPart}
                     "Referer": urls.DASHBOARD_URL,
                     "Host": user.serverIp
                 },
+                timeout: this.RESPONSE_TIMEOUT
             });
             return res.data;
         } catch (e) {
@@ -464,6 +497,11 @@ ${finalOtpPart}
     }
 
     async loop(user) {
+        if (!user.isActive) {
+            this.emit('log', `⏸️ User [${user.serverName}/${user.username}] is paused due to repeated failures`);
+            return;
+        }
+
         try {
             const data = await this.fetchSmsApi(user);
 
@@ -482,23 +520,46 @@ ${finalOtpPart}
                 } else {
                     process.stdout.write(".");
                 }
+                
+                // Reset fail count on success
+                user.failCount = 0;
                 setTimeout(() => this.loop(user), 3000);
             } else {
                 process.stdout.write("x");
+                user.failCount = 0; // No data is not a failure
                 setTimeout(() => this.loop(user), 3000);
             }
 
         } catch (e) {
-            this.emit('error', `Connection error [${user.serverName}/${user.username}]: ${e.message}`);
-            await new Promise(resolve => setTimeout(resolve, 5000));
+            user.failCount++;
+            this.emit('error', `Connection error [${user.serverName}/${user.username}] (Fail ${user.failCount}): ${e.message}`);
+            
+            // Pause user after 10 consecutive failures
+            if (user.failCount >= 10) {
+                user.isActive = false;
+                this.emit('error', `⏸️ PAUSED [${user.serverName}/${user.username}] after ${user.failCount} failures. Will retry in 5 minutes.`);
+                
+                // Resume after 5 minutes
+                setTimeout(() => {
+                    user.isActive = true;
+                    user.failCount = 0;
+                    this.emit('log', `▶️ RESUMING [${user.serverName}/${user.username}]`);
+                    this.startUser(user);
+                }, 300000); // 5 minutes
+                return;
+            }
+
+            // Exponential backoff based on fail count
+            const waitTime = Math.min(5000 * Math.pow(2, user.failCount - 1), 60000); // Max 60s
+            await new Promise(resolve => setTimeout(resolve, waitTime));
 
             const loggedIn = await this.performLogin(user);
             if (loggedIn) {
                 this.emit('log', `✅ Re-login success [${user.serverName}/${user.username}]`);
                 this.loop(user);
             } else {
-                this.emit('error', `❌ Re-login failed [${user.serverName}/${user.username}]`);
-                setTimeout(() => this.loop(user), 10000);
+                this.emit('error', `❌ Re-login failed [${user.serverName}/${user.username}], retry in ${waitTime/1000}s`);
+                setTimeout(() => this.loop(user), waitTime);
             }
         }
     }
@@ -506,11 +567,25 @@ ${finalOtpPart}
     async startUser(user) {
         user.currentUA = this.getRandomUA();
         user.jar = new tough.CookieJar();
-        user.client = wrapper(axios.create({ jar: user.jar, withCredentials: true }));
+        
+        // Create axios instance with proper timeout and agent configuration
+        user.client = wrapper(axios.create({ 
+            jar: user.jar, 
+            withCredentials: true,
+            timeout: this.CONNECTION_TIMEOUT,
+            httpAgent: this.httpAgent,
+            httpsAgent: this.httpsAgent,
+            maxRedirects: 5,
+            // Retry configuration
+            validateStatus: function (status) {
+                return status >= 200 && status < 500; // Accept all non-5xx as valid
+            }
+        }));
 
         const ok = await this.performLogin(user);
         if (!ok) {
-            this.emit('error', `Login failed [${user.serverName}/${user.username}], retrying in 10s...`);
+            user.failCount++;
+            this.emit('error', `Login failed [${user.serverName}/${user.username}] (Attempt ${user.failCount}), retrying in 10s...`);
             setTimeout(() => this.startUser(user), 10000);
             return;
         }
