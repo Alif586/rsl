@@ -12,6 +12,8 @@
     "cheerio": "^1.1.2",
     "country-emoji": "^1.5.6",
     "express": "^5.1.0",
+    "http-agent": "^0.1.2",
+    "https-agent": "^1.0.0",
     "input": "^1.0.1",
     "libphonenumber-js": "^1.12.23",
     "moment": "^2.30.1",
