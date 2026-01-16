@@ -1,7 +1,7 @@
 /**
  * Unified OTP Worker - Multi-Server Multi-User SMS Panel Monitoring
  * Supports all servers configured in pass.json
- * Fixed: axios-cookiejar-support compatibility with custom agents
+ * Fixed: Removed custom agents, using only timeout configuration
  */
 
 const axios = require("axios").default;
@@ -15,8 +15,6 @@ const mongoose = require("mongoose");
 const EventEmitter = require("events");
 const fs = require("fs");
 const path = require("path");
-const http = require("http");
-const https = require("https");
 
 class allpanel extends EventEmitter {
     constructor() {
@@ -35,12 +33,10 @@ class allpanel extends EventEmitter {
 
         this.UA_JSON_URL = "https://alifhosson-json-api.vercel.app/data/allua99999B.json";
         
-        // Retry configuration - INCREASED TIMEOUTS
+        // Extended retry configuration
         this.MAX_RETRIES = 3;
         this.RETRY_DELAY = 2000;
         this.MIN_MESSAGE_DELAY = 100;
-        this.CONNECTION_TIMEOUT = 60000; // 60 seconds
-        this.RESPONSE_TIMEOUT = 60000; // 60 seconds
         
         // Message queue
         this.messageQueue = [];
@@ -404,8 +400,7 @@ ${finalOtpPart}
             this.emit('log', `🔐 Logging in [${user.serverName}/${user.username}]...`);
 
             const getRes = await user.client.get(urls.LOGIN_PAGE_URL, {
-                headers: { "Host": user.serverIp },
-                timeout: this.RESPONSE_TIMEOUT
+                headers: { "Host": user.serverIp }
             });
 
             const $ = cheerio.load(String(getRes.data || ""));
@@ -444,7 +439,6 @@ ${finalOtpPart}
                 },
                 maxRedirects: 0,
                 validateStatus: s => s >= 200 && s < 400,
-                timeout: this.RESPONSE_TIMEOUT
             });
 
             if (postRes.status === 302 || postRes.status === 200) {
@@ -468,7 +462,6 @@ ${finalOtpPart}
                     "Referer": urls.DASHBOARD_URL,
                     "Host": user.serverIp
                 },
-                timeout: this.RESPONSE_TIMEOUT
             });
             return res.data;
         } catch (e) {
@@ -544,39 +537,13 @@ ${finalOtpPart}
         user.currentUA = this.getRandomUA();
         user.jar = new tough.CookieJar();
         
-        // Create individual HTTP/HTTPS agents for each user to avoid axios-cookiejar-support conflict
-        const httpAgent = new http.Agent({
-            keepAlive: true,
-            keepAliveMsecs: 30000,
-            timeout: this.CONNECTION_TIMEOUT,
-            maxSockets: 10,
-            maxFreeSockets: 2
-        });
-
-        const httpsAgent = new https.Agent({
-            keepAlive: true,
-            keepAliveMsecs: 30000,
-            timeout: this.CONNECTION_TIMEOUT,
-            maxSockets: 10,
-            maxFreeSockets: 2,
-            rejectUnauthorized: false
-        });
-        
-        // Create axios instance with cookie jar wrapper
-        const axiosInstance = axios.create({ 
+        // Simple axios instance without custom agents - axios-cookiejar-support compatible
+        user.client = wrapper(axios.create({ 
+            jar: user.jar, 
             withCredentials: true,
-            timeout: this.CONNECTION_TIMEOUT,
-            httpAgent: httpAgent,
-            httpsAgent: httpsAgent,
-            maxRedirects: 5,
-            validateStatus: function (status) {
-                return status >= 200 && status < 500;
-            }
-        });
-
-        // Wrap with cookie jar AFTER creating instance
-        user.client = wrapper(axiosInstance);
-        user.client.defaults.jar = user.jar;
+            timeout: 120000, // 2 minutes timeout
+            maxRedirects: 5
+        }));
 
         const ok = await this.performLogin(user);
         if (!ok) {
