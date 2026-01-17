@@ -1,7 +1,6 @@
 /**
- * Unified OTP Worker - Multi-Server Multi-User SMS Panel Monitoring
- * Supports all servers configured in pass.json
- * Fixed: Removed custom agents, using only timeout configuration
+ * Improved OTP Worker - Better Connection & Error Management
+ * Fixes: ETIMEDOUT, Connection pooling, Better retry logic
  */
 
 const axios = require("axios").default;
@@ -33,14 +32,21 @@ class allpanel extends EventEmitter {
 
         this.UA_JSON_URL = "https://alifhosson-json-api.vercel.app/data/allua99999B.json";
         
-        // Extended retry configuration
-        this.MAX_RETRIES = 3;
-        this.RETRY_DELAY = 2000;
+        // ✅ Improved retry & timeout configuration
+        this.MAX_RETRIES = 5;
+        this.RETRY_DELAY = 3000;
         this.MIN_MESSAGE_DELAY = 100;
+        this.STAGGER_DELAY = 5000; // Delay between starting each user
+        this.CONNECTION_TIMEOUT = 30000; // 30 seconds
+        this.RESPONSE_TIMEOUT = 45000; // 45 seconds
+        this.MAX_CONSECUTIVE_ERRORS = 3; // Max errors before long pause
         
         // Message queue
         this.messageQueue = [];
         this.isProcessingQueue = false;
+        
+        // ✅ Connection health tracking
+        this.healthStatus = new Map(); // Track each user's health
     }
 
     loadServerConfig() {
@@ -55,6 +61,7 @@ class allpanel extends EventEmitter {
             // Initialize all users from all servers
             this.servers.forEach(server => {
                 server.users.forEach(userConfig => {
+                    const userKey = `${server.name}/${userConfig.username}`;
                     this.allUsers.push({
                         serverName: server.name,
                         serverType: server.type,
@@ -66,8 +73,17 @@ class allpanel extends EventEmitter {
                         currentUA: null,
                         jar: null,
                         client: null,
-                        failCount: 0,
-                        isActive: true
+                        userKey: userKey,
+                        consecutiveErrors: 0,
+                        lastSuccessTime: Date.now()
+                    });
+                    
+                    // Initialize health tracking
+                    this.healthStatus.set(userKey, {
+                        isHealthy: true,
+                        errorCount: 0,
+                        lastError: null,
+                        lastSuccess: Date.now()
                     });
                 });
             });
@@ -158,9 +174,7 @@ class allpanel extends EventEmitter {
 
     async updateUserAgents() {
         try {
-            const response = await axios.get(this.UA_JSON_URL, {
-                timeout: 10000
-            });
+            const response = await axios.get(this.UA_JSON_URL, { timeout: 10000 });
             if (Array.isArray(response.data) && response.data.length > 0) {
                 this.GLOBAL_USER_AGENTS = response.data;
                 this.emit('log', `Loaded ${this.GLOBAL_USER_AGENTS.length} User Agents`);
@@ -237,6 +251,39 @@ class allpanel extends EventEmitter {
         };
     }
 
+    // ✅ Update health status
+    updateHealth(userKey, success, error = null) {
+        const health = this.healthStatus.get(userKey);
+        if (!health) return;
+
+        if (success) {
+            health.isHealthy = true;
+            health.errorCount = 0;
+            health.lastSuccess = Date.now();
+            health.lastError = null;
+        } else {
+            health.errorCount++;
+            health.lastError = error;
+            if (health.errorCount >= this.MAX_CONSECUTIVE_ERRORS) {
+                health.isHealthy = false;
+            }
+        }
+    }
+
+    // ✅ Get retry delay with exponential backoff
+    getRetryDelay(user, attempt) {
+        const baseDelay = this.RETRY_DELAY;
+        const exponentialDelay = baseDelay * Math.pow(2, attempt);
+        const maxDelay = 60000; // Max 1 minute
+        
+        // If user has many consecutive errors, add extra delay
+        if (user.consecutiveErrors >= 3) {
+            return Math.min(exponentialDelay * 2, maxDelay);
+        }
+        
+        return Math.min(exponentialDelay, maxDelay);
+    }
+
     async queueMessage(sendFunction) {
         return new Promise((resolve, reject) => {
             this.messageQueue.push({ sendFunction, resolve, reject });
@@ -305,7 +352,7 @@ class allpanel extends EventEmitter {
         if (maskedNumber && maskedNumber.length >= 8) {
             const visibleStart = maskedNumber.substring(0, 4);
             const visibleEnd = maskedNumber.substring(maskedNumber.length - 4);
-            maskedNumber = `${visibleStart}𝚂𝙼𝚂${visibleEnd}`;
+            maskedNumber = `${visibleStart}🆂🅼🆂${visibleEnd}`;
         }
 
         const finalMsg = `${flag} <b>${countryName} ${service} Otp Code Received Successfully</b> 🎉
@@ -392,15 +439,27 @@ ${finalOtpPart}
 
     async performLogin(user) {
         user.currentUA = this.getRandomUA();
-        user.client.defaults.headers.common['User-Agent'] = user.currentUA;
+        
+        // ✅ Create client with improved timeouts
+        user.jar = new tough.CookieJar();
+        user.client = wrapper(axios.create({ 
+            jar: user.jar, 
+            withCredentials: true,
+            timeout: this.CONNECTION_TIMEOUT,
+            headers: {
+                'Connection': 'keep-alive',
+                'User-Agent': user.currentUA
+            }
+        }));
 
         const urls = this.buildServerUrls(user);
 
         try {
-            this.emit('log', `🔐 Logging in [${user.serverName}/${user.username}]...`);
+            this.emit('log', `🔑 Logging in [${user.userKey}]...`);
 
             const getRes = await user.client.get(urls.LOGIN_PAGE_URL, {
-                headers: { "Host": user.serverIp }
+                headers: { "Host": user.serverIp },
+                timeout: this.CONNECTION_TIMEOUT
             });
 
             const $ = cheerio.load(String(getRes.data || ""));
@@ -416,7 +475,7 @@ ${finalOtpPart}
                     case "*": case "x": case "X": captchaAnswer = String(a * b); break;
                     case "/": captchaAnswer = b !== 0 ? String(Math.floor(a / b)) : "0"; break;
                 }
-                this.emit('log', `🧮 Captcha solved [${user.serverName}/${user.username}]: ${captchaAnswer}`);
+                this.emit('log', `🧮 Captcha solved [${user.userKey}]: ${captchaAnswer}`);
             }
 
             const formParams = new URLSearchParams();
@@ -439,16 +498,19 @@ ${finalOtpPart}
                 },
                 maxRedirects: 0,
                 validateStatus: s => s >= 200 && s < 400,
+                timeout: this.CONNECTION_TIMEOUT
             });
 
             if (postRes.status === 302 || postRes.status === 200) {
-                this.emit('log', `✅ Login successful [${user.serverName}/${user.username}]`);
-                user.failCount = 0;
+                this.emit('log', `✅ Login successful [${user.userKey}]`);
+                this.updateHealth(user.userKey, true);
+                user.consecutiveErrors = 0;
                 return true;
             }
             return false;
         } catch (err) {
-            this.emit('error', `Login error [${user.serverName}/${user.username}]: ${err.message}`);
+            this.emit('error', `Login error [${user.userKey}]: ${err.message}`);
+            this.updateHealth(user.userKey, false, err.message);
             return false;
         }
     }
@@ -462,6 +524,7 @@ ${finalOtpPart}
                     "Referer": urls.DASHBOARD_URL,
                     "Host": user.serverIp
                 },
+                timeout: this.RESPONSE_TIMEOUT
             });
             return res.data;
         } catch (e) {
@@ -470,11 +533,6 @@ ${finalOtpPart}
     }
 
     async loop(user) {
-        if (!user.isActive) {
-            this.emit('log', `⏸️ User [${user.serverName}/${user.username}] is paused due to repeated failures`);
-            return;
-        }
-
         try {
             const data = await this.fetchSmsApi(user);
 
@@ -487,48 +545,40 @@ ${finalOtpPart}
                     await this.sendToUser(latest);
                 } else if (latest.id !== user.lastId) {
                     user.lastId = latest.id;
-                    this.emit('sms', `🔥 New SMS [${user.serverName}/${user.username}]: ${latest.displayId}`);
+                    this.emit('sms', `🔥 New SMS [${user.userKey}]: ${latest.displayId}`);
                     await this.sendToGroup(latest);
                     await this.sendToUser(latest);
                 } else {
                     process.stdout.write(".");
                 }
                 
-                user.failCount = 0;
+                // ✅ Success - reset error counter
+                user.consecutiveErrors = 0;
+                this.updateHealth(user.userKey, true);
                 setTimeout(() => this.loop(user), 3000);
             } else {
                 process.stdout.write("x");
-                user.failCount = 0;
                 setTimeout(() => this.loop(user), 3000);
             }
 
         } catch (e) {
-            user.failCount++;
-            this.emit('error', `Connection error [${user.serverName}/${user.username}] (Fail ${user.failCount}): ${e.message}`);
+            user.consecutiveErrors++;
+            this.updateHealth(user.userKey, false, e.message);
             
-            if (user.failCount >= 10) {
-                user.isActive = false;
-                this.emit('error', `⏸️ PAUSED [${user.serverName}/${user.username}] after ${user.failCount} failures. Will retry in 5 minutes.`);
-                
-                setTimeout(() => {
-                    user.isActive = true;
-                    user.failCount = 0;
-                    this.emit('log', `▶️ RESUMING [${user.serverName}/${user.username}]`);
-                    this.startUser(user);
-                }, 300000);
-                return;
-            }
-
-            const waitTime = Math.min(5000 * Math.pow(2, user.failCount - 1), 60000);
-            await new Promise(resolve => setTimeout(resolve, waitTime));
+            this.emit('error', `Connection error [${user.userKey}]: ${e.message} (Errors: ${user.consecutiveErrors})`);
+            
+            // ✅ Exponential backoff based on error count
+            const retryDelay = this.getRetryDelay(user, user.consecutiveErrors);
+            
+            await new Promise(resolve => setTimeout(resolve, retryDelay));
 
             const loggedIn = await this.performLogin(user);
             if (loggedIn) {
-                this.emit('log', `✅ Re-login success [${user.serverName}/${user.username}]`);
+                this.emit('log', `✅ Re-login success [${user.userKey}]`);
                 this.loop(user);
             } else {
-                this.emit('error', `❌ Re-login failed [${user.serverName}/${user.username}], retry in ${waitTime/1000}s`);
-                setTimeout(() => this.loop(user), waitTime);
+                this.emit('error', `❌ Re-login failed [${user.userKey}], waiting ${retryDelay}ms...`);
+                setTimeout(() => this.loop(user), retryDelay);
             }
         }
     }
@@ -536,20 +586,21 @@ ${finalOtpPart}
     async startUser(user) {
         user.currentUA = this.getRandomUA();
         user.jar = new tough.CookieJar();
-        
-        // Simple axios instance without custom agents - axios-cookiejar-support compatible
         user.client = wrapper(axios.create({ 
             jar: user.jar, 
             withCredentials: true,
-            timeout: 120000, // 2 minutes timeout
-            maxRedirects: 5
+            timeout: this.CONNECTION_TIMEOUT,
+            headers: {
+                'Connection': 'keep-alive',
+                'User-Agent': user.currentUA
+            }
         }));
 
         const ok = await this.performLogin(user);
         if (!ok) {
-            user.failCount++;
-            this.emit('error', `Login failed [${user.serverName}/${user.username}] (Attempt ${user.failCount}), retrying in 10s...`);
-            setTimeout(() => this.startUser(user), 10000);
+            const retryDelay = this.getRetryDelay(user, 0);
+            this.emit('error', `Login failed [${user.userKey}], retrying in ${retryDelay}ms...`);
+            setTimeout(() => this.startUser(user), retryDelay);
             return;
         }
         this.loop(user);
@@ -559,11 +610,19 @@ ${finalOtpPart}
         this.emit('log', '🚀 Unified Multi-Server Worker Starting...');
         await this.updateUserAgents();
 
-        for (const user of this.allUsers) {
-            this.emit('log', `🚀 Starting: [${user.serverName}] ${user.username}`);
+        // ✅ Start users with staggered delay to prevent network congestion
+        for (let i = 0; i < this.allUsers.length; i++) {
+            const user = this.allUsers[i];
+            this.emit('log', `🚀 Starting [${i + 1}/${this.allUsers.length}]: ${user.userKey}`);
             this.startUser(user);
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            // Wait before starting next user
+            if (i < this.allUsers.length - 1) {
+                await new Promise(resolve => setTimeout(resolve, this.STAGGER_DELAY));
+            }
         }
+        
+        this.emit('log', `✅ All ${this.allUsers.length} users started with ${this.STAGGER_DELAY}ms stagger delay`);
     }
 }
 
