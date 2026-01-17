@@ -121,4 +121,15 @@
       ]
     }
   ]
-}
+},
+{
+      "name": "wolf",
+      "type": "https",
+      "server_ip": "213.32.24.208",
+      "base_path": "/ints",
+      "users": [
+        {
+          "username": "Rasel6669",
+          "password": "Rasel6669"
+        }
+      ]
