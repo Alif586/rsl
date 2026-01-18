@@ -35,8 +35,8 @@
       "base_path": "",
       "users": [
         {
-          "username": "smszone1",
-          "password": "smszone1"
+          "username": "smszone",
+          "password": "smszone"
         },
         {
           "username": "HUSSAIN011",
@@ -109,6 +109,18 @@
       ]
     },
     {
+      "name": "NumberPanel",
+      "type": "http",
+      "server_ip": "51.89.99.105",
+      "base_path": "/NumberPanel",
+      "users": [
+        {
+          "username": "Rasel6669",
+          "password": "Rasel6669"
+        }
+      ]
+    }
+    {
       "name": "SMS-HID",
       "type": "http",
       "server_ip": "185.2.83.39",
@@ -121,15 +133,4 @@
       ]
     }
   ]
-},
-{
-      "name": "wolf",
-      "type": "https",
-      "server_ip": "213.32.24.208",
-      "base_path": "/ints",
-      "users": [
-        {
-          "username": "Rasel6669",
-          "password": "Rasel6669"
-        }
-      ]
+}
