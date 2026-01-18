@@ -47,7 +47,7 @@
           "password": "Rrsel6669"
         }
       ]
-      },
+    },
     {
       "name": "Sniper",
       "type": "http",
@@ -119,7 +119,7 @@
           "password": "Rasel6669"
         }
       ]
-    }
+    },
     {
       "name": "SMS-HID",
       "type": "http",
