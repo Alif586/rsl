@@ -1,7 +1,7 @@
 /**
  * OTP WORKER 1 - SMS Panel Monitoring (Multi-User)
  * Server: 51.89.99.105 (NumberPanel)
- * Only sends to OTP Group (No user DB, no private messages)
+ * Fix applied: Headers, Keep-Alive Agent, and 503 Handling
  */
 
 const axios = require("axios").default;
@@ -12,6 +12,7 @@ const TelegramBot = require("node-telegram-bot-api");
 const { parsePhoneNumberFromString } = require("libphonenumber-js");
 const countryEmoji = require("country-emoji");
 const EventEmitter = require("events");
+const http = require("http"); // Required for Keep-Alive
 
 class OtpWorker1 extends EventEmitter {
     constructor() {
@@ -19,7 +20,13 @@ class OtpWorker1 extends EventEmitter {
         this.config = null;
         this.botGroup = null;
 
-        // Multiple users (Updated from your cURL data)
+        // Keep-Alive Agent to prevent 503 Connection Exhaustion
+        this.httpAgent = new http.Agent({ 
+            keepAlive: true,
+            maxSockets: 10,
+            keepAliveMsecs: 30000 
+        });
+
         this.users = [
             {
                 username: "Rasel6669",
@@ -32,19 +39,18 @@ class OtpWorker1 extends EventEmitter {
         ];
 
         this.GLOBAL_USER_AGENTS = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         ];
 
-        // Server Configuration UPDATED
         this.SERVER_IP = "51.89.99.105";
-        // Path changed from /ints to /NumberPanel
+        
+        // ⚠️ IF THIS FAILS AGAIN, CHANGE 'NumberPanel' BACK TO 'ints'
         this.BASE_URL = `http://${this.SERVER_IP}/NumberPanel`; 
         
         this.LOGIN_PAGE_URL = `${this.BASE_URL}/login`;
         this.LOGIN_POST_URL = `${this.BASE_URL}/signin`;
         this.DASHBOARD_URL = `${this.BASE_URL}/client/SMSCDRStats`;
-        
-        // Standard API path for this panel type
         this.API_BASE_URL = `${this.BASE_URL}/client/res/data_smscdr.php`;
 
         this.UA_JSON_URL = "https://alifhosson-json-api.vercel.app/data/allua99999B.json";
@@ -98,16 +104,12 @@ class OtpWorker1 extends EventEmitter {
     extractOtp(text) {
         if (!text) return null;
         let cleanText = text.replace(/<[^>]*>?/gm, ' ');
-
         const keywordMatch = cleanText.match(/(?:code|otp|pin|verification|vcode|pw|pass)[^0-9]*([\d -]{4,9})/i);
         if (keywordMatch && keywordMatch[1]) return keywordMatch[1].replace(/\D/g, "");
-
         const specificMatch = cleanText.match(/(?:\b|\s)(\d{3}[-\s]?\d{3})(?:\b|\s)/);
         if (specificMatch && specificMatch[1]) return specificMatch[1].replace(/\D/g, "");
-
         const simpleMatch = cleanText.match(/\b(\d{4,8})\b/);
         if (simpleMatch) return simpleMatch[0];
-
         return null;
     }
 
@@ -146,7 +148,6 @@ class OtpWorker1 extends EventEmitter {
         const otp = this.extractOtp(sms.message) || "N/A";
         const { name: countryName, flag } = sms.countryData;
         const service = sms.cli || "Service";
-
         let maskedNumber = sms.number;
         if (maskedNumber && maskedNumber.length >= 7) {
             const visibleStart = maskedNumber.substring(0, 6);
@@ -186,16 +187,29 @@ class OtpWorker1 extends EventEmitter {
     }
 
     async performLogin(user) {
-        user.currentUA = this.getRandomUA();
-        user.client.defaults.headers.common['User-Agent'] = user.currentUA;
+        // Only set UA if it's not set
+        if(!user.currentUA) user.currentUA = this.getRandomUA();
+        
+        // Define standard browser headers
+        const headers = {
+            'User-Agent': user.currentUA,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate',
+            'Cache-Control': 'max-age=0',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Host': this.SERVER_IP
+        };
+
+        user.client.defaults.headers.common = headers;
 
         try {
             this.emit('log', `🔐 Logging in [${user.username}]...`);
 
-            const getRes = await user.client.get(this.LOGIN_PAGE_URL, {
-                headers: { "Host": this.SERVER_IP }
-            });
-
+            // 1. GET Login Page to set cookies
+            const getRes = await user.client.get(this.LOGIN_PAGE_URL);
+            
             const $ = cheerio.load(String(getRes.data || ""));
             let captchaAnswer = null;
 
@@ -223,8 +237,10 @@ class OtpWorker1 extends EventEmitter {
                 if (name && !["username", "password", "capt"].includes(name)) formParams.append(name, val);
             });
 
+            // 2. POST Login Data
             const postRes = await user.client.post(this.LOGIN_POST_URL, formParams.toString(), {
                 headers: {
+                    ...headers,
                     "Content-Type": "application/x-www-form-urlencoded",
                     "Referer": this.LOGIN_PAGE_URL,
                     "Origin": `http://${this.SERVER_IP}`
@@ -249,12 +265,17 @@ class OtpWorker1 extends EventEmitter {
             const res = await user.client.get(this.getApiUrl(), {
                 headers: {
                     "X-Requested-With": "XMLHttpRequest",
+                    "Accept": "application/json, text/javascript, */*; q=0.01",
                     "Referer": this.DASHBOARD_URL,
                     "Host": this.SERVER_IP
                 },
+                timeout: 10000 // 10s Timeout
             });
             return res.data;
         } catch (e) {
+            if (e.response && e.response.status === 503) {
+                throw new Error("503 Service Unavailable (Server Overload or Bot Block)");
+            }
             throw new Error(`Fetch error: ${e.message}`);
         }
     }
@@ -283,9 +304,16 @@ class OtpWorker1 extends EventEmitter {
             }
 
         } catch (e) {
+            const is503 = e.message.includes("503");
             this.emit('error', `Connection error [${user.username}]: ${e.message}`);
-            await new Promise(resolve => setTimeout(resolve, 5000));
+            
+            // If 503, wait longer (20 seconds) before retrying to clear the block
+            const waitTime = is503 ? 20000 : 5000;
+            if(is503) this.emit('log', `⚠️ Pausing for 20s due to 503 Error...`);
 
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+
+            // Try to re-login
             const loggedIn = await this.performLogin(user);
             if (loggedIn) {
                 this.emit('log', `✅ Re-login success [${user.username}]`);
@@ -300,7 +328,14 @@ class OtpWorker1 extends EventEmitter {
     async startUser(user) {
         user.currentUA = this.getRandomUA();
         user.jar = new tough.CookieJar();
-        user.client = wrapper(axios.create({ jar: user.jar, withCredentials: true }));
+        
+        // Initialize client with Keep-Alive Agent
+        user.client = wrapper(axios.create({ 
+            jar: user.jar, 
+            withCredentials: true,
+            httpAgent: this.httpAgent, // Critical for 503 fixes
+            timeout: 15000
+        }));
 
         const ok = await this.performLogin(user);
         if (!ok) {
@@ -315,7 +350,6 @@ class OtpWorker1 extends EventEmitter {
         this.emit('log', '🚀 Multi-User Worker Starting...');
         await this.updateUserAgents();
 
-        // Start all users simultaneously
         for (const user of this.users) {
             this.emit('log', `🚀 Starting user: ${user.username}`);
             this.startUser(user);
