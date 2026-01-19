@@ -1,7 +1,7 @@
 /**
  * OTP WORKER 1 - SMS Panel Monitoring (Multi-User)
  * Server: 51.89.99.105 (NumberPanel)
- * Fix applied: Removed incompatible Agent, kept 503 handling & Headers
+ * Status: Fixed (Headers synced with cURL, Crash removed)
  */
 
 const axios = require("axios").default;
@@ -30,18 +30,15 @@ class OtpWorker1 extends EventEmitter {
             }
         ];
 
-        this.GLOBAL_USER_AGENTS = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        ];
-
-        this.SERVER_IP = "51.89.99.105";
+        // Specific UA from your successful cURL
+        this.ANDROID_UA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36";
         
-        // Ensure this path is correct. If 404 error, change back to '/ints'
+        this.SERVER_IP = "51.89.99.105";
         this.BASE_URL = `http://${this.SERVER_IP}/NumberPanel`; 
         
         this.LOGIN_PAGE_URL = `${this.BASE_URL}/login`;
         this.LOGIN_POST_URL = `${this.BASE_URL}/signin`;
+        this.CLIENT_HOME_URL = `${this.BASE_URL}/client/`; // Added from cURL flow
         this.DASHBOARD_URL = `${this.BASE_URL}/client/SMSCDRStats`;
         this.API_BASE_URL = `${this.BASE_URL}/client/res/data_smscdr.php`;
 
@@ -62,20 +59,19 @@ class OtpWorker1 extends EventEmitter {
         }
     }
 
-    async updateUserAgents() {
-        try {
-            const response = await axios.get(this.UA_JSON_URL);
-            if (Array.isArray(response.data) && response.data.length > 0) {
-                this.GLOBAL_USER_AGENTS = response.data;
-                this.emit('log', `Loaded ${this.GLOBAL_USER_AGENTS.length} User Agents`);
-            }
-        } catch (error) {
-            this.emit('log', '⚠️ Using default User Agents');
-        }
-    }
-
-    getRandomUA() {
-        return this.GLOBAL_USER_AGENTS[Math.floor(Math.random() * this.GLOBAL_USER_AGENTS.length)];
+    // Standard headers from your cURL to prevent 503
+    getCommonHeaders(referer = null) {
+        const headers = {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language': 'en-US,en;q=0.9,fr-FR;q=0.8,fr;q=0.7,sq-AL;q=0.6,sq;q=0.5,pt-PT;q=0.4,pt;q=0.3,az-AZ;q=0.2,az;q=0.1',
+            'Cache-Control': 'max-age=0',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'User-Agent': this.ANDROID_UA,
+            'Host': this.SERVER_IP
+        };
+        if (referer) headers['Referer'] = referer;
+        return headers;
     }
 
     getTodayDate() {
@@ -179,27 +175,13 @@ class OtpWorker1 extends EventEmitter {
     }
 
     async performLogin(user) {
-        // Only set UA if it's not set
-        if(!user.currentUA) user.currentUA = this.getRandomUA();
-        
-        // Define standard browser headers (Crucial for avoiding 503)
-        const headers = {
-            'User-Agent': user.currentUA,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate',
-            'Cache-Control': 'max-age=0',
-            'Upgrade-Insecure-Requests': '1',
-            'Host': this.SERVER_IP
-        };
-
-        user.client.defaults.headers.common = headers;
-
         try {
             this.emit('log', `🔐 Logging in [${user.username}]...`);
 
-            // 1. GET Login Page to set cookies
-            const getRes = await user.client.get(this.LOGIN_PAGE_URL);
+            // 1. GET Login Page (Set Cookies)
+            // Use standard UA to get the captcha properly
+            const headersGet = this.getCommonHeaders();
+            const getRes = await user.client.get(this.LOGIN_PAGE_URL, { headers: headersGet });
             
             const $ = cheerio.load(String(getRes.data || ""));
             let captchaAnswer = null;
@@ -228,25 +210,34 @@ class OtpWorker1 extends EventEmitter {
                 if (name && !["username", "password", "capt"].includes(name)) formParams.append(name, val);
             });
 
-            // 2. POST Login Data
+            // 2. POST Login Data (Matches your cURL exactly)
+            const headersPost = {
+                ...this.getCommonHeaders(this.LOGIN_PAGE_URL),
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Origin": `http://${this.SERVER_IP}`
+            };
+
             const postRes = await user.client.post(this.LOGIN_POST_URL, formParams.toString(), {
-                headers: {
-                    ...headers,
-                    "Content-Type": "application/x-www-form-urlencoded",
-                    "Referer": this.LOGIN_PAGE_URL,
-                    "Origin": `http://${this.SERVER_IP}`
-                },
+                headers: headersPost,
                 maxRedirects: 0,
                 validateStatus: s => s >= 200 && s < 400,
             });
 
             if (postRes.status === 302 || postRes.status === 200) {
                 this.emit('log', `✅ Login successful [${user.username}]`);
+                
+                // 3. Follow up GET to /client/ (As seen in your cURL)
+                // This mimics the redirect behavior of the browser
+                try {
+                    await user.client.get(this.CLIENT_HOME_URL, {
+                        headers: this.getCommonHeaders(this.LOGIN_PAGE_URL)
+                    });
+                } catch(e) { /* Ignore minor error on redirect check */ }
+
                 return true;
             }
             return false;
         } catch (err) {
-            // Handle 503 during login specifically
             if (err.response && err.response.status === 503) {
                 this.emit('error', `Login 503 [${user.username}] - Server Busy`);
             } else {
@@ -258,14 +249,16 @@ class OtpWorker1 extends EventEmitter {
 
     async fetchSmsApi(user) {
         try {
+            // API Headers: mimic standard browser AJAX + Referer
+            const headers = {
+                ...this.getCommonHeaders(this.DASHBOARD_URL),
+                "X-Requested-With": "XMLHttpRequest",
+                "Accept": "application/json, text/javascript, */*; q=0.01",
+            };
+
             const res = await user.client.get(this.getApiUrl(), {
-                headers: {
-                    "X-Requested-With": "XMLHttpRequest",
-                    "Accept": "application/json, text/javascript, */*; q=0.01",
-                    "Referer": this.DASHBOARD_URL,
-                    "Host": this.SERVER_IP
-                },
-                timeout: 10000 // 10s Timeout
+                headers: headers,
+                timeout: 10000 
             });
             return res.data;
         } catch (e) {
@@ -303,9 +296,8 @@ class OtpWorker1 extends EventEmitter {
             const is503 = e.message.includes("503");
             this.emit('error', `Connection error [${user.username}]: ${e.message}`);
             
-            // If 503, wait longer (20 seconds) before retrying to clear the block
-            const waitTime = is503 ? 20000 : 5000;
-            if(is503) this.emit('log', `⚠️ Pausing for 20s due to 503 Error...`);
+            const waitTime = is503 ? 15000 : 5000;
+            if(is503) this.emit('log', `⚠️ Pausing for 15s due to 503...`);
 
             await new Promise(resolve => setTimeout(resolve, waitTime));
 
@@ -315,17 +307,14 @@ class OtpWorker1 extends EventEmitter {
                 this.emit('log', `✅ Re-login success [${user.username}]`);
                 this.loop(user);
             } else {
-                this.emit('error', `❌ Re-login failed [${user.username}]`);
                 setTimeout(() => this.loop(user), 10000);
             }
         }
     }
 
     async startUser(user) {
-        user.currentUA = this.getRandomUA();
         user.jar = new tough.CookieJar();
-        
-        // REMOVED 'httpAgent' to fix the crash
+        // Removed custom httpAgent to fix the crash
         user.client = wrapper(axios.create({ 
             jar: user.jar, 
             withCredentials: true,
@@ -343,8 +332,7 @@ class OtpWorker1 extends EventEmitter {
 
     async start() {
         this.emit('log', '🚀 Multi-User Worker Starting...');
-        await this.updateUserAgents();
-
+        
         for (const user of this.users) {
             this.emit('log', `🚀 Starting user: ${user.username}`);
             this.startUser(user);
