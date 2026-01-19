@@ -27,15 +27,8 @@ class OtpWorker1 extends EventEmitter {
                 currentUA: null,
                 jar: null,
                 client: null
-            },
-            {
-                username: "Rasel6669",
-                password: "Rasel6669",
-                lastId: null,
-                currentUA: null,
-                jar: null,
-                client: null
             }
+            
         ];
 
         // Specific UA from your successful cURL
