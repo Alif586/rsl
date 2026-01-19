@@ -1,7 +1,7 @@
 /**
  * OTP WORKER 1 - SMS Panel Monitoring (Multi-User)
  * Server: 51.89.99.105 (NumberPanel)
- * Fix applied: Headers, Keep-Alive Agent, and 503 Handling
+ * Fix applied: Removed incompatible Agent, kept 503 handling & Headers
  */
 
 const axios = require("axios").default;
@@ -12,20 +12,12 @@ const TelegramBot = require("node-telegram-bot-api");
 const { parsePhoneNumberFromString } = require("libphonenumber-js");
 const countryEmoji = require("country-emoji");
 const EventEmitter = require("events");
-const http = require("http"); // Required for Keep-Alive
 
 class OtpWorker1 extends EventEmitter {
     constructor() {
         super();
         this.config = null;
         this.botGroup = null;
-
-        // Keep-Alive Agent to prevent 503 Connection Exhaustion
-        this.httpAgent = new http.Agent({ 
-            keepAlive: true,
-            maxSockets: 10,
-            keepAliveMsecs: 30000 
-        });
 
         this.users = [
             {
@@ -45,7 +37,7 @@ class OtpWorker1 extends EventEmitter {
 
         this.SERVER_IP = "51.89.99.105";
         
-        // ⚠️ IF THIS FAILS AGAIN, CHANGE 'NumberPanel' BACK TO 'ints'
+        // Ensure this path is correct. If 404 error, change back to '/ints'
         this.BASE_URL = `http://${this.SERVER_IP}/NumberPanel`; 
         
         this.LOGIN_PAGE_URL = `${this.BASE_URL}/login`;
@@ -190,14 +182,13 @@ class OtpWorker1 extends EventEmitter {
         // Only set UA if it's not set
         if(!user.currentUA) user.currentUA = this.getRandomUA();
         
-        // Define standard browser headers
+        // Define standard browser headers (Crucial for avoiding 503)
         const headers = {
             'User-Agent': user.currentUA,
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
             'Accept-Encoding': 'gzip, deflate',
             'Cache-Control': 'max-age=0',
-            'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
             'Host': this.SERVER_IP
         };
@@ -255,7 +246,12 @@ class OtpWorker1 extends EventEmitter {
             }
             return false;
         } catch (err) {
-            this.emit('error', `Login error [${user.username}]: ${err.message}`);
+            // Handle 503 during login specifically
+            if (err.response && err.response.status === 503) {
+                this.emit('error', `Login 503 [${user.username}] - Server Busy`);
+            } else {
+                this.emit('error', `Login error [${user.username}]: ${err.message}`);
+            }
             return false;
         }
     }
@@ -274,7 +270,7 @@ class OtpWorker1 extends EventEmitter {
             return res.data;
         } catch (e) {
             if (e.response && e.response.status === 503) {
-                throw new Error("503 Service Unavailable (Server Overload or Bot Block)");
+                throw new Error("503 Service Unavailable");
             }
             throw new Error(`Fetch error: ${e.message}`);
         }
@@ -329,11 +325,10 @@ class OtpWorker1 extends EventEmitter {
         user.currentUA = this.getRandomUA();
         user.jar = new tough.CookieJar();
         
-        // Initialize client with Keep-Alive Agent
+        // REMOVED 'httpAgent' to fix the crash
         user.client = wrapper(axios.create({ 
             jar: user.jar, 
             withCredentials: true,
-            httpAgent: this.httpAgent, // Critical for 503 fixes
             timeout: 15000
         }));
 
