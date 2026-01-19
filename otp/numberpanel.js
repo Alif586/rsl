@@ -21,8 +21,8 @@ class OtpWorker1 extends EventEmitter {
 
         this.users = [
             {
-                username: "Rasel6669",
-                password: "Rasel6669",
+                username: "Rasel5500",
+                password: "Rasel5500",
                 lastId: null,
                 currentUA: null,
                 jar: null,
