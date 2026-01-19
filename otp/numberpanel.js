@@ -1,5 +1,5 @@
 /**
- * OTP WORKER 2 - SMS Panel Monitoring (Fixed Connection)
+ * OTP WORKER 3 - SMS Panel Monitoring (Token Fix + 503 Fix)
  * Server: 51.89.99.105
  * Path: /NumberPanel
  */
@@ -12,7 +12,7 @@ const TelegramBot = require("node-telegram-bot-api");
 const { parsePhoneNumberFromString } = require("libphonenumber-js");
 const countryEmoji = require("country-emoji");
 const EventEmitter = require("events");
-const http = require("http"); // Required for Keep-Alive
+const http = require("http");
 
 class OtpWorkerNew extends EventEmitter {
     constructor() {
@@ -48,7 +48,7 @@ class OtpWorkerNew extends EventEmitter {
 
         this.UA_JSON_URL = "https://alifhosson-json-api.vercel.app/data/allua99999B.json";
         
-        // Keep-Alive Agent to prevent 503 errors
+        // Keep-Alive Agent to prevent 503 errors (reuses connections)
         this.httpAgent = new http.Agent({ keepAlive: true, maxSockets: 10 });
     }
 
@@ -96,7 +96,7 @@ class OtpWorkerNew extends EventEmitter {
         const fdate2 = encodeURIComponent(`${today} 23:59:59`);
         const encodedSessKey = encodeURIComponent(sesskey || "");
         
-        // Added timestamp (Date.now()) to mimic browser behavior and avoid cache/errors
+        // Timestamp to prevent caching
         const timestamp = Date.now();
 
         return `${this.API_BASE_URL}?fdate1=${fdate1}&fdate2=${fdate2}&frange=&fnum=&fcli=&fgdate=&fgmonth=&fgrange=&fgnumber=&fgcli=&fg=0&sesskey=${encodedSessKey}&sEcho=1&iColumns=7&sColumns=%2C%2C%2C%2C%2C%2C&iDisplayStart=0&iDisplayLength=25&mDataProp_0=0&sSearch_0=&bRegex_0=false&bSearchable_0=true&bSortable_0=true&mDataProp_1=1&sSearch_1=&bRegex_1=false&bSearchable_1=true&bSortable_1=true&mDataProp_2=2&sSearch_2=&bRegex_2=false&bSearchable_2=true&bSortable_2=true&mDataProp_3=3&sSearch_3=&bRegex_3=false&bSearchable_3=true&bSortable_3=true&mDataProp_4=4&sSearch_4=&bRegex_4=false&bSearchable_4=true&bSortable_4=true&mDataProp_5=5&sSearch_5=&bRegex_5=false&bSearchable_5=true&bSortable_5=true&mDataProp_6=6&sSearch_6=&bRegex_6=false&bSearchable_6=true&bSortable_6=true&sSearch=&bRegex=false&iSortCol_0=0&sSortDir_0=desc&iSortingCols=1&_=${timestamp}`;
@@ -196,14 +196,19 @@ class OtpWorkerNew extends EventEmitter {
             });
             
             const $ = cheerio.load(response.data);
-            const scriptContent = $("body").html();
+            const bodyText = $("body").text();
             
-            // Try different regex patterns for sesskey
-            const match = scriptContent.match(/sesskey\s*=\s*['"]([^'"]+)['"]/) || 
-                          scriptContent.match(/sesskey\s*:\s*['"]([^'"]+)['"]/);
+            // 1. Look for "Your API Token is : XXXXX" (Text based)
+            let match = bodyText.match(/Your API Token is\s*:\s*([A-Za-z0-9+/=_]+)/i);
             
+            // 2. Fallback: Look for JS variable "sesskey = 'XXXX'"
+            if (!match) {
+                 const scriptContent = $("body").html();
+                 match = scriptContent.match(/sesskey\s*=\s*['"]([^'"]+)['"]/);
+            }
+
             if (match && match[1]) {
-                user.sesskey = match[1];
+                user.sesskey = match[1].trim();
                 this.emit('log', `🔑 Sesskey found: ${user.sesskey.substring(0, 10)}...`);
                 return true;
             } else {
@@ -218,7 +223,7 @@ class OtpWorkerNew extends EventEmitter {
 
     async performLogin(user) {
         user.currentUA = this.getRandomUA();
-        // Setup standard headers
+        // Standard headers
         user.client.defaults.headers.common['User-Agent'] = user.currentUA;
         user.client.defaults.headers.common['Accept-Language'] = 'en-US,en;q=0.9';
         user.client.defaults.headers.common['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8';
@@ -293,7 +298,6 @@ class OtpWorkerNew extends EventEmitter {
             });
             return res.data;
         } catch (e) {
-            // Re-throw so the loop handles the logic
             throw e;
         }
     }
@@ -315,7 +319,7 @@ class OtpWorkerNew extends EventEmitter {
                 } else {
                     process.stdout.write(".");
                 }
-                // Increased to 5s to prevent 503
+                // 5 seconds delay to be safe
                 setTimeout(() => this.loop(user), 5000);
             } else {
                 process.stdout.write("x");
@@ -326,14 +330,12 @@ class OtpWorkerNew extends EventEmitter {
             const status = e.response ? e.response.status : "Unknown";
             this.emit('error', `Connection error [${user.username}] Status: ${status} - ${e.message}`);
 
-            // Specific handling for 503 (Server Busy) -> Wait longer
             if (status === 503) {
                 this.emit('log', `⚠️ Server overloaded (503). Waiting 20s...`);
                 setTimeout(() => this.loop(user), 20000);
                 return;
             }
 
-            // Normal reconnection logic
             await new Promise(resolve => setTimeout(resolve, 5000));
             const loggedIn = await this.performLogin(user);
             if (loggedIn) {
@@ -350,12 +352,12 @@ class OtpWorkerNew extends EventEmitter {
         user.currentUA = this.getRandomUA();
         user.jar = new tough.CookieJar();
         
-        // Attach the Keep-Alive Agent here
+        // Use Keep-Alive Agent
         user.client = wrapper(axios.create({ 
             jar: user.jar, 
             withCredentials: true,
             httpAgent: this.httpAgent,
-            timeout: 10000 // 10s timeout
+            timeout: 10000
         }));
 
         const ok = await this.performLogin(user);
