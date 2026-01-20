@@ -7,8 +7,14 @@
       "protocol": "http",
       "base_path": "/ints",
       "users": [
-        { "username": "Rasel6669", "password": "Rasel6669" },
-        { "username": "Rasel24", "password": "Rasel24" }
+        {
+          "username": "Rasel6669",
+          "password": "Rasel6669"
+        },
+        {
+          "username": "Rasel24",
+          "password": "Rasel24"
+        }
       ]
     },
     {
@@ -18,8 +24,14 @@
       "protocol": "http",
       "base_path": "/ints",
       "users": [
-        { "username": "Rasel6669", "password": "Rasel6669" },
-        { "username": "Rasel6660", "password": "Rasel6660" }
+        {
+          "username": "Rasel6669",
+          "password": "Rasel6669"
+        },
+        {
+          "username": "Rasel6660",
+          "password": "Rasel6660"
+        }
       ]
     },
     {
@@ -29,9 +41,18 @@
       "protocol": "https",
       "base_path": "",
       "users": [
-        { "username": "smszone", "password": "smszone" },
-        { "username": "HUSSAIN011", "password": "HUSSAIN011" },
-        { "username": "Rrsel6669", "password": "Rrsel6669" }
+        {
+          "username": "smszone",
+          "password": "smszone"
+        },
+        {
+          "username": "HUSSAIN011",
+          "password": "HUSSAIN011"
+        },
+        {
+          "username": "Rrsel6669",
+          "password": "Rrsel6669"
+        }
       ]
     },
     {
@@ -41,7 +62,10 @@
       "protocol": "http",
       "base_path": "/ints",
       "users": [
-        { "username": "Rasel6669", "password": "Rasel6669" }
+        {
+          "username": "Rasel6669",
+          "password": "Rasel6669"
+        }
       ]
     },
     {
@@ -51,7 +75,10 @@
       "protocol": "http",
       "base_path": "/ints",
       "users": [
-        { "username": "Rasel6669", "password": "Rasel6669" }
+        {
+          "username": "Rasel6669",
+          "password": "Rasel6669"
+        }
       ]
     },
     {
@@ -61,7 +88,10 @@
       "protocol": "http",
       "base_path": "/ints",
       "users": [
-        { "username": "Rasel6669", "password": "Rasel6669" }
+        {
+          "username": "Rasel6669",
+          "password": "Rasel6669"
+        }
       ]
     },
     {
@@ -71,7 +101,10 @@
       "protocol": "https",
       "base_path": "",
       "users": [
-        { "username": "Hussain1", "password": "Hussain1" }
+        {
+          "username": "Hussain1",
+          "password": "Hussain1"
+        }
       ]
     },
     {
@@ -81,7 +114,10 @@
       "protocol": "http",
       "base_path": "/ints",
       "users": [
-        { "username": "Rasel6669", "password": "Rasel6669" }
+        {
+          "username": "Rasel6669",
+          "password": "Rasel6669"
+        }
       ]
     },
     {
@@ -91,7 +127,10 @@
       "protocol": "http",
       "base_path": "/ints",
       "users": [
-        { "username": "rasel01", "password": "rasel01" }
+        {
+          "username": "rasel01",
+          "password": "rasel01"
+        }
       ]
     }
   ]
