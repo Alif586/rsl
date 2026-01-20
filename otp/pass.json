@@ -2,124 +2,96 @@
   "servers": [
     {
       "name": "D-GRUP",
-      "type": "http",
+      "enabled": true,
       "server_ip": "139.99.63.204",
+      "protocol": "http",
       "base_path": "/ints",
       "users": [
-        {
-          "username": "Rasel6669",
-          "password": "Rasel6669"
-        },
-        {
-          "username": "Rasel24",
-          "password": "Rasel24"
-        }
+        { "username": "Rasel6669", "password": "Rasel6669" },
+        { "username": "Rasel24", "password": "Rasel24" }
       ]
     },
     {
       "name": "MSI-SMS",
-      "type": "http",
+      "enabled": true,
       "server_ip": "145.239.130.45",
+      "protocol": "http",
       "base_path": "/ints",
       "users": [
-        {
-          "username": "Rasel6669",
-          "password": "Rasel6669",
-          "username": "Rasel6660",
-          "password": "Rasel6660"
-        }
+        { "username": "Rasel6669", "password": "Rasel6669" },
+        { "username": "Rasel6660", "password": "Rasel6660" }
       ]
     },
     {
       "name": "IMSSMS",
-      "type": "https",
+      "enabled": true,
       "server_ip": "imssms.org",
+      "protocol": "https",
       "base_path": "",
       "users": [
-        {
-          "username": "smszone",
-          "password": "smszone"
-        },
-        {
-          "username": "HUSSAIN011",
-          "password": "HUSSAIN011"
-        },
-        {
-          "username": "Rrsel6669",
-          "password": "Rrsel6669"
-        }
+        { "username": "smszone", "password": "smszone" },
+        { "username": "HUSSAIN011", "password": "HUSSAIN011" },
+        { "username": "Rrsel6669", "password": "Rrsel6669" }
       ]
     },
     {
       "name": "Sniper",
-      "type": "http",
+      "enabled": true,
       "server_ip": "135.125.222.224",
+      "protocol": "http",
       "base_path": "/ints",
       "users": [
-        {
-          "username": "Rasel6669",
-          "password": "Rasel6669"
-        }
+        { "username": "Rasel6669", "password": "Rasel6669" }
       ]
     },
     {
       "name": "Goat-sms",
-      "type": "http",
+      "enabled": true,
       "server_ip": "167.114.117.67",
+      "protocol": "http",
       "base_path": "/ints",
       "users": [
-        {
-          "username": "Rasel6669",
-          "password": "Rasel6669"
-        }
+        { "username": "Rasel6669", "password": "Rasel6669" }
       ]
     },
     {
       "name": "Flyn-SMS",
-      "type": "http",
+      "enabled": true,
       "server_ip": "91.232.105.47",
+      "protocol": "http",
       "base_path": "/ints",
       "users": [
-        {
-          "username": "Rasel6669",
-          "password": "Rasel6669"
-        }
+        { "username": "Rasel6669", "password": "Rasel6669" }
       ]
     },
     {
       "name": "FLYSMS",
-      "type": "https",
+      "enabled": true,
       "server_ip": "flysms.net",
+      "protocol": "https",
       "base_path": "",
       "users": [
-        {
-          "username": "Hussain1",
-          "password": "Hussain1"
-        }
+        { "username": "Hussain1", "password": "Hussain1" }
       ]
     },
     {
       "name": "HADI-SMS",
-      "type": "http",
+      "enabled": true,
       "server_ip": "185.2.83.39",
+      "protocol": "http",
       "base_path": "/ints",
       "users": [
-        {
-          "username": "Rasel6669",
-          "password": "Rasel6669"
-        }
+        { "username": "Rasel6669", "password": "Rasel6669" }
       ]
     },
     {
       "name": "SMS-HID",
-      "type": "http",
+      "enabled": true,
       "server_ip": "185.2.83.39",
+      "protocol": "http",
       "base_path": "/ints",
       "users": [
-        {
-          "username": "rasel01",
-          "password": "rasel01"
-        }
+        { "username": "rasel01", "password": "rasel01" }
       ]
     }
   ]
