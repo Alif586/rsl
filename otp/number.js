@@ -1,11 +1,15 @@
 /**
- * Smart OTP Worker - Client Panel Monitoring (51.89.99.105)
+ * SMART AUTO-LOGIN OTP WORKER - Client Panel Monitoring
+ * Server: 51.89.99.105
+ * Path: /NumberPanel/client/
+ * 
  * Features:
- * - Intelligent session management
- * - Auto-login only when session expires
- * - User + Group message support
- * - Multi-message catch-up
+ * - Session-aware: Only logs in when session expires
+ * - Network error tolerant: Doesn't re-login on API timeouts
+ * - Login cooldown: Max 1 login per minute
+ * - Session validation before login
  * - Production-grade error handling
+ * - User SMS delivery (NEW)
  */
 
 const axios = require("axios").default;
@@ -18,7 +22,7 @@ const countryEmoji = require("country-emoji");
 const mongoose = require("mongoose");
 const EventEmitter = require("events");
 
-class SmartClientPanel extends EventEmitter {
+class SmartOtpWorker extends EventEmitter {
     constructor() {
         super();
         this.config = null;
@@ -37,19 +41,18 @@ class SmartClientPanel extends EventEmitter {
                 client: null,
                 sessKey: null,
                 
-                // Session management
-                isLoggedIn: false,
-                sessionValid: false,
+                // Smart Login Control
+                isSessionValid: false,
                 lastLoginAttempt: 0,
-                loginInProgress: false,
-                consecutiveFailures: 0
+                loginCooldown: 60000, // 1 minute
+                consecutiveErrors: 0,
+                maxConsecutiveErrors: 5
             }
         ];
 
         this.GLOBAL_USER_AGENTS = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
             "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-            "Mozilla/5.0 (Linux; Android 15; Infinix X6858) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.7444.102 Mobile Safari/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
         ];
 
         // Server Configuration
@@ -59,18 +62,7 @@ class SmartClientPanel extends EventEmitter {
         this.LOGIN_POST_URL = `${this.BASE_URL}/signin`;
         this.REPORTS_URL = `${this.BASE_URL}/client/SMSCDRStats`;
         this.API_BASE_URL = `${this.BASE_URL}/client/res/data_smscdr.php`;
-
-        this.UA_JSON_URL = "https://alifhosson-json-api.vercel.app/data/allua99999B.json";
-        
-        // Login cooldown: 1 minute
-        this.LOGIN_COOLDOWN_MS = 60000;
-        
-        // Message queue
-        this.messageQueue = [];
-        this.isProcessingQueue = false;
-        this.MIN_MESSAGE_DELAY = 100;
-        this.MAX_RETRIES = 3;
-        this.RETRY_DELAY = 2000;
+        this.DASHBOARD_URL = `${this.BASE_URL}/client/dashboard`;
     }
 
     setConfig(config) {
@@ -81,27 +73,18 @@ class SmartClientPanel extends EventEmitter {
 
     initializeBots() {
         try {
-            const botOptions = {
-                polling: false,
-                request: {
-                    agentOptions: {
-                        keepAlive: true,
-                        keepAliveMsecs: 10000
-                    },
-                    timeout: 30000
-                }
-            };
-
-            if (this.config.BOT_TOKENS && this.config.BOT_TOKENS.NOTIFICATION_BOT) {
-                this.botGroup = new TelegramBot(this.config.BOT_TOKENS.NOTIFICATION_BOT, botOptions);
-                this.botGroup.deleteWebHook().catch(() => {});
-                this.emit('log', '✅ Group Bot initialized');
+            if (this.config?.BOT_TOKENS?.NOTIFICATION_BOT) {
+                this.botGroup = new TelegramBot(this.config.BOT_TOKENS.NOTIFICATION_BOT, { polling: false });
+                this.emit('log', '✅ Group Bot initialized successfully');
+            } else {
+                this.emit('error', '⚠️ Group Bot Token missing in config');
             }
 
-            if (this.config.BOT_TOKENS && this.config.BOT_TOKENS.USER_BOT) {
-                this.botUser = new TelegramBot(this.config.BOT_TOKENS.USER_BOT, botOptions);
-                this.botUser.deleteWebHook().catch(() => {});
-                this.emit('log', '✅ User Bot initialized');
+            if (this.config?.BOT_TOKENS?.USER_BOT) {
+                this.botUser = new TelegramBot(this.config.BOT_TOKENS.USER_BOT, { polling: false });
+                this.emit('log', '✅ User Bot initialized successfully');
+            } else {
+                this.emit('error', '⚠️ User Bot Token missing in config');
             }
         } catch (e) {
             this.emit('error', `Bot initialization failed: ${e.message}`);
@@ -109,46 +92,38 @@ class SmartClientPanel extends EventEmitter {
     }
 
     initializeDatabase() {
-        const numberSchema = new mongoose.Schema({
-            number: { type: String, unique: true, required: true },
-            country: { type: String, required: true },
-            flag: { type: String, default: "🌍" },
-            status: { type: String, enum: ['Available', 'Used', 'Used_History'], default: 'Available' },
-            assigned_to: { type: Number, default: null },
-            assigned_at: { type: Date, default: null },
-            created_at: { type: Date, default: Date.now }
-        });
-
-        const dbOptions = {
-            serverSelectionTimeoutMS: 30000,
-            socketTimeoutMS: 45000,
-            family: 4,
-            maxPoolSize: 10,
-            minPoolSize: 1,
-        };
-
-        const conn = mongoose.createConnection(this.config.NUMBER_DB_URI, dbOptions);
-
-        conn.on('connected', () => {
-            this.emit('log', '✅ Database connected');
-        });
-
-        conn.on('error', (err) => {
-            this.emit('error', `Database error: ${err.message}`);
-        });
-
-        this.NumberModel = conn.model('Number', numberSchema);
-    }
-
-    async updateUserAgents() {
         try {
-            const response = await axios.get(this.UA_JSON_URL);
-            if (Array.isArray(response.data) && response.data.length > 0) {
-                this.GLOBAL_USER_AGENTS = response.data;
-                this.emit('log', `Loaded ${this.GLOBAL_USER_AGENTS.length} User Agents`);
-            }
-        } catch (error) {
-            this.emit('log', '⚠️ Using default User Agents');
+            const numberSchema = new mongoose.Schema({
+                number: { type: String, unique: true, required: true },
+                country: { type: String, required: true },
+                flag: { type: String, default: "🌍" },
+                status: { type: String, enum: ['Available', 'Used', 'Used_History'], default: 'Available' },
+                assigned_to: { type: Number, default: null },
+                assigned_at: { type: Date, default: null },
+                created_at: { type: Date, default: Date.now }
+            });
+
+            const dbOptions = {
+                serverSelectionTimeoutMS: 30000,
+                socketTimeoutMS: 45000,
+                family: 4,
+                maxPoolSize: 100,
+                minPoolSize: 5,
+            };
+
+            const conn = mongoose.createConnection(this.config.NUMBER_DB_URI, dbOptions);
+
+            conn.on('connected', () => {
+                this.emit('log', '✅ Database connected');
+            });
+
+            conn.on('error', (err) => {
+                this.emit('error', `Database error: ${err.message}`);
+            });
+
+            this.NumberModel = conn.model('Number', numberSchema);
+        } catch (e) {
+            this.emit('error', `Database initialization failed: ${e.message}`);
         }
     }
 
@@ -175,24 +150,17 @@ class SmartClientPanel extends EventEmitter {
     extractOtp(text) {
         if (!text) return null;
 
-        // Remove HTML tags
-        let cleanText = text.replace(/<[^>]*>?/gm, ' ');
-
-        // 1. Hash match (e.g., #92667572)
-        const hashMatch = cleanText.match(/#\s*(\d{4,8})/);
+        const hashMatch = text.match(/#\s*(\d{4,8})/);
         if (hashMatch && hashMatch[1]) return hashMatch[1];
 
-        // 2. Keyword match
-        const keywordMatch = cleanText.match(/(?:code|otp|pin|verification|vcode|pw|pass|key)[^0-9]*([\d -]{4,9})/i);
+        const keywordMatch = text.match(/(?:code|otp|pin|verification|vcode|pw|pass|key)[^0-9]*([\d]{4,8})/i);
         if (keywordMatch && keywordMatch[1]) return keywordMatch[1].replace(/\D/g, "");
 
-        // 3. Specific pattern
-        const specificMatch = cleanText.match(/(?:\b|\s)(\d{3}[-\s]?\d{3})(?:\b|\s)/);
-        if (specificMatch && specificMatch[1]) return specificMatch[1].replace(/\D/g, "");
+        const specificMatch = text.match(/(?:\b|\s)(\d{4,8})(?:\b|\s)/);
+        if (specificMatch) return specificMatch[1];
 
-        // 4. Any 4-8 digit number
-        const simpleMatch = cleanText.match(/\b(\d{4,8})\b/);
-        if (simpleMatch) return simpleMatch[0];
+        const dashMatch = text.match(/(\d{3,4}-\d{3,4})/);
+        if (dashMatch) return dashMatch[0].replace(/-/g, "");
 
         return null;
     }
@@ -236,7 +204,7 @@ class SmartClientPanel extends EventEmitter {
         }
 
         fullMessage = fullMessage.trim();
-        const uniqueHash = `${row[0]}_${rawNumber}_${fullMessage.substring(0, 30)}`;
+        const uniqueHash = `${row[0]}_${rawNumber}_${fullMessage.substring(0, 20)}`;
 
         return {
             id: uniqueHash,
@@ -248,75 +216,16 @@ class SmartClientPanel extends EventEmitter {
         };
     }
 
-    async queueMessage(sendFunction) {
-        return new Promise((resolve, reject) => {
-            this.messageQueue.push({ sendFunction, resolve, reject });
-            this.processQueue();
-        });
-    }
-
-    async processQueue() {
-        if (this.isProcessingQueue || this.messageQueue.length === 0) return;
-        
-        this.isProcessingQueue = true;
-        
-        while (this.messageQueue.length > 0) {
-            const { sendFunction, resolve, reject } = this.messageQueue.shift();
-            try {
-                const result = await sendFunction();
-                resolve(result);
-            } catch (error) {
-                reject(error);
-            }
-            await new Promise(res => setTimeout(res, this.MIN_MESSAGE_DELAY));
-        }
-        
-        this.isProcessingQueue = false;
-    }
-
-    async sendTelegramWithRetry(bot, chatId, message, options, retries = 0) {
-        try {
-            await bot.sendMessage(chatId, message, options);
-            return true;
-        } catch (error) {
-            const errorCode = error.code;
-            const errorMessage = error.message;
-
-            if (errorCode === 'ECONNRESET' || errorCode === 'ETIMEDOUT' || errorCode === 'ENOTFOUND') {
-                if (retries < this.MAX_RETRIES) {
-                    const delay = this.RETRY_DELAY * (retries + 1);
-                    this.emit('log', `⚠️ Connection error (${errorCode}), retry ${retries + 1}/${this.MAX_RETRIES} in ${delay}ms...`);
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                    return this.sendTelegramWithRetry(bot, chatId, message, options, retries + 1);
-                }
-            }
-
-            if (errorMessage.includes('429') || errorMessage.includes('Too Many Requests')) {
-                const retryAfter = error.response?.parameters?.retry_after || 5;
-                this.emit('log', `⚠️ Rate limited, waiting ${retryAfter}s...`);
-                await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
-                return this.sendTelegramWithRetry(bot, chatId, message, options, retries);
-            }
-
-            if (errorMessage.includes('403') || errorMessage.includes('Forbidden')) {
-                this.emit('error', `❌ Bot blocked by user/chat: ${chatId}`);
-                return false;
-            }
-
-            throw error;
-        }
-    }
-
     async sendToGroup(sms) {
-        if (!this.botGroup) return;
+        if (!this.botGroup) return; 
 
         const otp = this.extractOtp(sms.message) || "N/A";
         const { name: countryName, flag } = sms.countryData;
         const service = sms.cli || "Service";
 
         let maskedNumber = sms.number;
-        if (maskedNumber && maskedNumber.length >= 8) {
-            const visibleStart = maskedNumber.substring(0, 4);
+        if (maskedNumber && maskedNumber.length >= 7) {
+            const visibleStart = maskedNumber.substring(0, 6);
             const visibleEnd = maskedNumber.substring(maskedNumber.length - 4);
             maskedNumber = `${visibleStart}𝚂𝙼𝚂${visibleEnd}`;
         }
@@ -326,47 +235,44 @@ class SmartClientPanel extends EventEmitter {
             .replace(/</g, "&lt;")
             .replace(/>/g, "&gt;");
 
-        const finalMsg = `${flag} <b>${countryName} ${service} Otp Code Received Successfully</b> 🎉
+        const finalMsg = `✅ ${flag} <b>${countryName} ${service} Otp Code Received Successfully</b> 🎉
 
-📍 <b>𝗬𝗼𝘂𝗿 𝗢𝗧𝗣:</b>  <code>${otp}</code>
+🔑 <b>𝘠𝘰𝘶𝘳 𝘖𝘛𝘗:</b>  <code>${otp}</code>
 
 ☎️ <b>Number:</b> <code>${maskedNumber}</code>
 ⚙️ <b>Service:</b> ${service}
 🌍 <b>Country:</b> ${countryName} ${flag}
 
-📩 <b>𝗙𝘂𝗹𝗹-𝗠𝗲𝘀𝘀𝗮𝗴𝗲:</b>
+📩 <b>𝐅𝐮𝐥𝐥-𝐌𝐞𝐬𝐬𝐚𝐠𝐞:</b>
 <pre>${safeMessage}</pre>`;
 
         const options = {
             parse_mode: "HTML",
-            disable_web_page_preview: true,
             reply_markup: {
                 inline_keyboard: [
                     [
-                        { text: "🚀 Panel", url: this.config.GROUP_LINKS.NUMBER_PANEL_LINK },
-                        { text: "📞All Number", url: this.config.GROUP_LINKS.MAIN_CHANNEL_LINK }
+                        { text: "🚀 Panel", url: this.config?.GROUP_LINKS?.NUMBER_PANEL_LINK },
+                        { text: "Buy IP", url: this.config?.GROUP_LINKS?.MAIN_CHANNEL_LINK }
                     ]
                 ]
             }
         };
 
         try {
-            const success = await this.queueMessage(() =>
-                this.sendTelegramWithRetry(this.botGroup, this.config.GROUP_LINKS.OTP_GROUP_ID, finalMsg, options)
-            );
-
-            if (success) {
-                this.emit('sms', `✅ Group message sent: ${otp}`);
-            } else {
-                this.emit('error', `❌ Failed to send group message after retries`);
-            }
+            await this.botGroup.sendMessage(this.config.GROUP_LINKS.OTP_GROUP_ID, finalMsg, options);
+            this.emit('sms', `✅ Group message sent: ${otp}`);
         } catch (e) {
-            this.emit('error', `Group send failed: ${e.code || 'UNKNOWN'}: ${e.message}`);
+            this.emit('error', `Group send failed: ${e.message}`);
         }
     }
 
+    /**
+     * 👤 SEND OTP TO INDIVIDUAL USER
+     * Sends private SMS to assigned user from database
+     */
     async sendToUser(sms) {
-        if (!this.botUser || !sms.number || !sms.message) return;
+        if (!this.botUser || !this.NumberModel) return;
+        if (!sms.number || !sms.message) return;
 
         const otp = this.extractOtp(sms.message);
         const cleanNumber = String(sms.number).replace(/\D/g, "");
@@ -385,136 +291,110 @@ class SmartClientPanel extends EventEmitter {
 
                 let finalOtpPart = "";
                 if (otp) {
-                    finalOtpPart = `📍 OTP : <code>${otp}</code>`;
+                    finalOtpPart = `🔑 OTP : <code>${otp}</code>`;
                 }
 
                 const finalMsg = `🌎 Country : ${dbCountryName} ${flag}
-📢 Number : <code>${cleanNumber}</code>
+🔢 Number : <code>${cleanNumber}</code>
 ${finalOtpPart}
 
 ✅ Stay With Us.💖`;
 
-                const success = await this.queueMessage(() =>
-                    this.sendTelegramWithRetry(this.botUser, userId, finalMsg, { parse_mode: "HTML" })
-                );
-
-                if (success) {
-                    this.emit('sms', `✅ Private OTP sent to User: ${userId}`);
-                } else {
-                    this.emit('error', `❌ Failed to send to user ${userId} after retries`);
-                }
+                await this.botUser.sendMessage(userId, finalMsg, { parse_mode: "HTML" });
+                this.emit('sms', `✅ Private OTP sent to User: ${userId}`);
             }
         } catch (e) {
-            this.emit('error', `User send failed: ${e.code || 'UNKNOWN'}: ${e.message}`);
+            this.emit('error', `User send failed: ${e.message}`);
         }
     }
 
     /**
-     * 🔐 SESSION VALIDATION
+     * 🔍 SMART SESSION VALIDATOR
+     * Checks if session is still valid WITHOUT full re-login
      */
     async validateSession(user) {
         try {
-            const response = await user.client.get(this.REPORTS_URL, {
-                headers: {
-                    "User-Agent": user.currentUA,
-                    "Host": this.SERVER_IP
-                },
+            const res = await user.client.get(this.DASHBOARD_URL, {
+                headers: { "Host": this.SERVER_IP },
                 maxRedirects: 0,
-                validateStatus: (status) => status >= 200 && status < 400
+                validateStatus: s => s >= 200 && s < 400,
+                timeout: 8000
             });
 
-            const pageContent = String(response.data || "");
-            const isLoginPage = pageContent.includes("login") && 
-                               (pageContent.includes("username") || pageContent.includes("password"));
-            
-            if (response.status === 200 && !isLoginPage) {
-                // Check if sessKey is still present
-                const hasSessionKey = pageContent.includes("sesskey");
-                if (hasSessionKey) {
-                    user.sessionValid = true;
-                    return true;
+            // If we get redirected to login page = session expired
+            if (res.status === 302) {
+                const location = res.headers.location || "";
+                if (location.includes("/login")) {
+                    this.emit('log', `⚠️ Session expired (302 redirect) [${user.username}]`);
+                    return false;
                 }
             }
-            
-            user.sessionValid = false;
-            return false;
-            
-        } catch (error) {
-            if (error.response?.status === 302 || error.response?.status === 401) {
-                user.sessionValid = false;
+
+            // Check if response contains login form
+            const html = String(res.data || "");
+            if (html.includes('name="username"') || html.includes('name="password"')) {
+                this.emit('log', `⚠️ Session expired (login form detected) [${user.username}]`);
                 return false;
             }
-            
-            this.emit('log', `⚠️ Session check network error [${user.username}]: ${error.message}`);
-            return user.sessionValid;
+
+            // Session is valid
+            return true;
+
+        } catch (err) {
+            // Network errors don't mean session is invalid
+            if (err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT') {
+                this.emit('error', `⚠️ Session check timeout (network issue, not session issue)`);
+                return true; // Assume session is still valid
+            }
+            this.emit('error', `Session check error: ${err.message}`);
+            return true; // Conservative: assume valid on unknown errors
         }
     }
 
     /**
      * 🔐 SMART LOGIN WITH COOLDOWN
+     * Only logs in if:
+     * 1. Session is truly expired (validated)
+     * 2. Cooldown period has passed
      */
-    async performSmartLogin(user) {
+    async smartLogin(user, reason = "unknown") {
         const now = Date.now();
-        const timeSinceLastLogin = now - user.lastLoginAttempt;
-
-        if (user.loginInProgress) {
-            this.emit('log', `⏳ Login already in progress [${user.username}]`);
-            while (user.loginInProgress) {
-                await new Promise(resolve => setTimeout(resolve, 1000));
-            }
-            return user.isLoggedIn;
-        }
-
-        if (timeSinceLastLogin < this.LOGIN_COOLDOWN_MS && user.lastLoginAttempt > 0) {
-            const waitTime = Math.ceil((this.LOGIN_COOLDOWN_MS - timeSinceLastLogin) / 1000);
-            this.emit('log', `⏰ Login cooldown active [${user.username}] - wait ${waitTime}s`);
+        
+        // Check cooldown
+        if (now - user.lastLoginAttempt < user.loginCooldown) {
+            const waitTime = Math.ceil((user.loginCooldown - (now - user.lastLoginAttempt)) / 1000);
+            this.emit('log', `⏳ Login cooldown active, wait ${waitTime}s [${user.username}]`);
             return false;
         }
 
-        const sessionValid = await this.validateSession(user);
-        if (sessionValid) {
-            this.emit('log', `✅ Session still valid [${user.username}] - login not needed`);
-            user.isLoggedIn = true;
+        // Validate session before logging in
+        this.emit('log', `🔍 Validating session before login [${user.username}]...`);
+        const isValid = await this.validateSession(user);
+        
+        if (isValid) {
+            this.emit('log', `✅ Session still valid, login skipped [${user.username}]`);
+            user.isSessionValid = true;
             return true;
         }
 
-        user.loginInProgress = true;
+        // Session is expired, proceed with login
         user.lastLoginAttempt = now;
+        this.emit('log', `🔐 Login initiated (Reason: ${reason}) [${user.username}]`);
 
-        try {
-            const success = await this.performLogin(user);
-            
-            if (success) {
-                user.isLoggedIn = true;
-                user.sessionValid = true;
-                user.consecutiveFailures = 0;
-                this.emit('log', `✅ Login successful [${user.username}]`);
-            } else {
-                user.isLoggedIn = false;
-                user.sessionValid = false;
-                user.consecutiveFailures++;
-                this.emit('error', `❌ Login failed [${user.username}] - attempt ${user.consecutiveFailures}`);
-            }
-            
-            return success;
-            
-        } finally {
-            user.loginInProgress = false;
-        }
+        return await this.performLogin(user);
     }
 
     /**
-     * 🔐 PERFORM LOGIN
+     * 🔓 PERFORM LOGIN
      */
     async performLogin(user) {
         user.currentUA = this.getRandomUA();
         user.client.defaults.headers.common['User-Agent'] = user.currentUA;
 
         try {
-            this.emit('log', `🔑 Logging in [${user.username}]...`);
-
             const getRes = await user.client.get(this.LOGIN_PAGE_URL, {
-                headers: { "Host": this.SERVER_IP }
+                headers: { "Host": this.SERVER_IP },
+                timeout: 10000
             });
 
             const $ = cheerio.load(String(getRes.data || ""));
@@ -532,7 +412,7 @@ ${finalOtpPart}
                     case "*": case "x": case "X": captchaAnswer = String(a * b); break;
                     case "/": captchaAnswer = b !== 0 ? String(Math.floor(a / b)) : "0"; break;
                 }
-                this.emit('log', `🧮 Captcha solved [${user.username}]: ${captchaAnswer}`);
+                this.emit('log', `🧮 Captcha solved: ${a} ${op} ${b} = ${captchaAnswer}`);
             }
 
             const formParams = new URLSearchParams();
@@ -543,52 +423,73 @@ ${finalOtpPart}
             $("form input[type=hidden]").each((i, el) => {
                 const name = $(el).attr("name");
                 const val = $(el).attr("value") || "";
-                if (name && !["username", "password", "capt"].includes(name)) formParams.append(name, val);
+                if (name && !["username", "password", "capt"].includes(name)) {
+                    formParams.append(name, val);
+                }
             });
 
             const postRes = await user.client.post(this.LOGIN_POST_URL, formParams.toString(), {
                 headers: {
                     "Content-Type": "application/x-www-form-urlencoded",
                     "Referer": this.LOGIN_PAGE_URL,
-                    "Origin": `http://${this.SERVER_IP}`,
-                    "Upgrade-Insecure-Requests": "1"
+                    "Origin": `http://${this.SERVER_IP}`
                 },
                 maxRedirects: 0,
                 validateStatus: s => s >= 200 && s < 400,
+                timeout: 10000
             });
 
             if (postRes.status === 302 || postRes.status === 200) {
-                return await this.fetchSessionKey(user);
+                const hasKey = await this.fetchSessionKey(user);
+                if (hasKey) {
+                    user.isSessionValid = true;
+                    user.consecutiveErrors = 0;
+                    this.emit('log', `✅ Login successful [${user.username}]`);
+                    return true;
+                }
             }
+
+            this.emit('error', `❌ Login failed [${user.username}]`);
+            user.isSessionValid = false;
             return false;
+
         } catch (err) {
-            this.emit('error', `Login error [${user.username}]: ${err.message}`);
+            this.emit('error', `Login exception [${user.username}]: ${err.message}`);
+            user.isSessionValid = false;
             return false;
         }
     }
 
+    /**
+     * 🔑 FETCH SESSION KEY
+     */
     async fetchSessionKey(user) {
         try {
             const res = await user.client.get(this.REPORTS_URL, {
                 headers: {
-                    "Referer": this.BASE_URL,
+                    "Referer": this.DASHBOARD_URL,
                     "Host": this.SERVER_IP
-                }
+                },
+                timeout: 10000
             });
 
             const html = res.data;
             let key = null;
+            
             const scriptMatch = html.match(/var\s+sesskey\s*=\s*['"]([^'"]+)['"]/);
             if (scriptMatch) key = scriptMatch[1];
+            
             if (!key) {
                 const linkMatch = html.match(/sesskey=([^&"']+)/);
                 if (linkMatch) key = linkMatch[1];
             }
+            
             if (key) {
                 user.sessKey = key;
-                this.emit('log', `🔑 Session Key: ${user.sessKey}`);
+                this.emit('log', `🔑 Session Key: ${user.sessKey.substring(0, 10)}...`);
                 return true;
             }
+            
             return false;
         } catch (e) {
             this.emit('error', `Session Key fetch error: ${e.message}`);
@@ -597,11 +498,11 @@ ${finalOtpPart}
     }
 
     /**
-     * 🔐 SMART API FETCH
+     * 📡 FETCH SMS API WITH SMART ERROR HANDLING
      */
     async fetchSmsApi(user) {
-        if (!user.sessKey) throw new Error('SESSION_EXPIRED');
-
+        if (!user.sessKey) throw new Error("No Session Key");
+        
         try {
             const url = this.getApiUrl(user.sessKey);
             const res = await user.client.get(url, {
@@ -610,179 +511,107 @@ ${finalOtpPart}
                     "Referer": this.REPORTS_URL,
                     "Host": this.SERVER_IP
                 },
-                timeout: 15000,
-                maxRedirects: 0,
-                validateStatus: (status) => status >= 200 && status < 400
+                timeout: 12000
             });
 
-            if (res.status === 302 || res.status === 301) {
-                this.emit('log', `🔒 Redirect detected [${user.username}] - session expired`);
-                user.sessionValid = false;
-                user.isLoggedIn = false;
-                throw new Error('SESSION_EXPIRED');
+            // Reset error counter on success
+            user.consecutiveErrors = 0;
+            return res.data;
+
+        } catch (e) {
+            // Distinguish between network errors and session errors
+            if (e.code === 'ECONNABORTED' || e.code === 'ETIMEDOUT' || e.code === 'ECONNRESET') {
+                throw new Error(`NETWORK_ERROR: ${e.message}`);
             }
-
-            const responseData = res.data;
-
-            if (typeof responseData === 'string') {
-                const htmlContent = responseData.toLowerCase();
-                
-                if (htmlContent.includes('<form') && 
-                    (htmlContent.includes('username') || htmlContent.includes('password') || htmlContent.includes('login'))) {
-                    this.emit('log', `🔒 Login page detected [${user.username}] - session expired`);
-                    user.sessionValid = false;
-                    user.isLoggedIn = false;
-                    throw new Error('SESSION_EXPIRED');
-                }
-                
-                try {
-                    const parsed = JSON.parse(responseData);
-                    if (parsed && typeof parsed === 'object') {
-                        user.sessionValid = true;
-                        user.isLoggedIn = true;
-                        user.consecutiveFailures = 0;
-                        return parsed;
-                    }
-                } catch (e) {
-                    this.emit('log', `⚠️ Non-JSON response [${user.username}]`);
-                    throw new Error('INVALID_RESPONSE');
-                }
+            
+            if (e.response?.status === 401 || e.response?.status === 403) {
+                throw new Error(`SESSION_EXPIRED: ${e.message}`);
             }
-
-            if (responseData && typeof responseData === 'object') {
-                if (responseData.error || responseData.message) {
-                    const errorMsg = error.message;
-            if (errorMsg === 'SESSION_EXPIRED' || errorMsg === 'INVALID_RESPONSE' || 
-                errorMsg === 'NETWORK_ERROR' || errorMsg === 'SERVER_ERROR') {
-                throw error;
-            }
-
-            this.emit('log', `⚠️ Unknown fetch error [${user.username}]: ${errorMsg}`);
-            throw new Error('UNKNOWN_ERROR');
+            
+            throw new Error(`API_ERROR: ${e.message}`);
         }
     }
 
     /**
-     * 🔄 MAIN MONITORING LOOP
+     * 🔄 MAIN LOOP WITH INTELLIGENT ERROR RECOVERY
      */
     async loop(user) {
         try {
             const data = await this.fetchSmsApi(user);
 
             if (data && Array.isArray(data.aaData) && data.aaData.length > 0) {
-                // Process ALL new messages
-                const currentMessages = data.aaData.map(row => this.mapRow(row));
-                
+                const latest = this.mapRow(data.aaData[0]);
+
                 if (user.lastId === null) {
-                    const latest = currentMessages[0];
                     user.lastId = latest.id;
                     await this.sendToGroup(latest);
                     await this.sendToUser(latest);
+                } else if (latest.id !== user.lastId) {
+                    user.lastId = latest.id;
+                    this.emit('sms', `🔥 New SMS [${user.username}]: ${latest.displayId}`);
+                    await this.sendToGroup(latest);
+                    await this.sendToUser(latest);
                 } else {
-                    const newMessages = [];
-                    for (const msg of currentMessages) {
-                        if (msg.id !== user.lastId) {
-                            newMessages.push(msg);
-                        } else {
-                            break;
-                        }
-                    }
-                    
-                    if (newMessages.length > 0) {
-                        for (const newMsg of newMessages) {
-                            this.emit('sms', `🔥 New SMS [${user.username}]: ${newMsg.displayId}`);
-                            await this.sendToGroup(newMsg);
-                            await this.sendToUser(newMsg);
-                        }
-                        
-                        user.lastId = newMessages[0].id;
-                        
-                        if (newMessages.length > 1) {
-                            this.emit('log', `📬 Sent ${newMessages.length} queued messages [${user.username}]`);
-                        }
-                    } else {
-                        process.stdout.write(".");
-                    }
+                    process.stdout.write(".");
                 }
                 
-                setTimeout(() => this.loop(user), 3000);
-                
-            } else if (data && typeof data === 'object') {
-                process.stdout.write("x");
+                // Continue loop
                 setTimeout(() => this.loop(user), 3000);
             } else {
-                this.emit('log', `⚠️ Unexpected data format [${user.username}]`);
-                setTimeout(() => this.loop(user), 5000);
+                process.stdout.write("○");
+                setTimeout(() => this.loop(user), 3000);
             }
 
-        } catch (error) {
-            const errorMsg = error.message;
+        } catch (e) {
+            const errorType = e.message.split(':')[0];
             
-            if (errorMsg === 'SESSION_EXPIRED') {
-                this.emit('log', `🔐 Session expired detected [${user.username}] - attempting auto-login`);
+            // NETWORK ERRORS - Don't re-login, just retry
+            if (errorType === 'NETWORK_ERROR') {
+                this.emit('error', `🌐 Network issue [${user.username}]: ${e.message}`);
+                user.consecutiveErrors++;
                 
-                const loginSuccess = await this.performSmartLogin(user);
+                if (user.consecutiveErrors > user.maxConsecutiveErrors) {
+                    this.emit('error', `⚠️ Too many errors, resetting session [${user.username}]`);
+                    await this.smartLogin(user, "consecutive_errors");
+                }
                 
-                if (loginSuccess) {
-                    this.emit('log', `✅ Auto-login successful [${user.username}] - resuming monitoring`);
+                setTimeout(() => this.loop(user), 5000);
+                return;
+            }
+
+            // SESSION EXPIRED - Smart re-login
+            if (errorType === 'SESSION_EXPIRED') {
+                this.emit('error', `🔓 Session expired [${user.username}]`);
+                user.isSessionValid = false;
+                
+                const loggedIn = await this.smartLogin(user, "session_expired");
+                if (loggedIn) {
                     setTimeout(() => this.loop(user), 2000);
                 } else {
-                    this.emit('error', `❌ Auto-login failed [${user.username}] - retry in 30s`);
-                    setTimeout(() => this.loop(user), 30000);
+                    setTimeout(() => this.loop(user), 10000);
                 }
                 return;
             }
+
+            // OTHER API ERRORS - Try smart re-login
+            this.emit('error', `⚠️ API Error [${user.username}]: ${e.message}`);
+            user.consecutiveErrors++;
             
-            if (errorMsg === 'NETWORK_ERROR') {
-                user.consecutiveFailures++;
-                this.emit('log', `⚠️ Network issue [${user.username}] (${user.consecutiveFailures}) - retry in 10s`);
-                setTimeout(() => this.loop(user), 10000);
-                return;
-            }
-            
-            if (errorMsg === 'SERVER_ERROR') {
-                user.consecutiveFailures++;
-                this.emit('log', `⚠️ Server error [${user.username}] (${user.consecutiveFailures}) - retry in 15s`);
-                setTimeout(() => this.loop(user), 15000);
-                return;
-            }
-            
-            if (errorMsg === 'INVALID_RESPONSE') {
-                user.consecutiveFailures++;
-                this.emit('log', `⚠️ Invalid response [${user.username}] (${user.consecutiveFailures})`);
-                
-                if (user.consecutiveFailures >= 3) {
-                    this.emit('log', `🔄 Multiple invalid responses [${user.username}] - attempting re-login`);
-                    user.consecutiveFailures = 0;
-                    const loginSuccess = await this.performSmartLogin(user);
-                    
-                    if (loginSuccess) {
-                        setTimeout(() => this.loop(user), 2000);
-                    } else {
-                        setTimeout(() => this.loop(user), 30000);
-                    }
+            if (user.consecutiveErrors > 3) {
+                const loggedIn = await this.smartLogin(user, "api_errors");
+                if (loggedIn) {
+                    setTimeout(() => this.loop(user), 2000);
                 } else {
-                    setTimeout(() => this.loop(user), 8000);
+                    setTimeout(() => this.loop(user), 10000);
                 }
-                return;
-            }
-            
-            user.consecutiveFailures++;
-            this.emit('error', `❌ Unknown error [${user.username}]: ${errorMsg} (failure ${user.consecutiveFailures})`);
-            
-            if (user.consecutiveFailures >= 5) {
-                this.emit('log', `🔄 Too many failures [${user.username}] - attempting re-login`);
-                user.consecutiveFailures = 0;
-                await this.performSmartLogin(user);
-                setTimeout(() => this.loop(user), 5000);
             } else {
-                setTimeout(() => this.loop(user), 12000);
+                setTimeout(() => this.loop(user), 5000);
             }
         }
     }
 
     /**
-     * 🚀 START USER MONITORING
+     * 🚀 START USER
      */
     async startUser(user) {
         user.currentUA = this.getRandomUA();
@@ -793,89 +622,32 @@ ${finalOtpPart}
             timeout: 15000
         }));
 
-        this.emit('log', `🚀 Starting user [${user.username}]...`);
-        
-        const loginSuccess = await this.performSmartLogin(user);
-        
-        if (!loginSuccess) {
-            this.emit('error', `❌ Initial login failed [${user.username}] - retry in 30s`);
+        // Initial login with smart validation
+        const ok = await this.smartLogin(user, "initial_start");
+        if (!ok) {
+            this.emit('error', `Initial login failed [${user.username}], retrying in 30s...`);
             setTimeout(() => this.startUser(user), 30000);
             return;
         }
         
-        this.emit('log', `✅ User ready [${user.username}] - starting monitoring loop`);
+        this.emit('log', `✅ User started successfully [${user.username}]`);
         this.loop(user);
     }
 
     /**
-     * 🚀 START ALL USERS
+     * 🚀 START WORKER
      */
     async start() {
-        this.emit('log', '🚀 Smart Client Panel Worker Starting (51.89.99.105)...');
-        this.emit('log', '📋 Features:');
-        this.emit('log', '   ✓ Smart auto-login (only when needed)');
-        this.emit('log', '   ✓ Session validation before login');
-        this.emit('log', '   ✓ Login cooldown protection');
-        this.emit('log', '   ✓ Multi-message catch-up');
-        this.emit('log', '   ✓ User + Group notifications');
-        this.emit('log', '');
+        this.emit('log', '🚀 Smart Auto-Login Worker Starting...');
+        this.emit('log', '📋 Features: Session-aware | Network tolerant | Login cooldown | User SMS delivery');
         
-        await this.updateUserAgents();
-
         for (const user of this.users) {
-            this.emit('log', `🚀 Starting: ${user.username}`);
+            this.emit('log', `👤 Starting user: ${user.username}`);
             this.startUser(user);
             await new Promise(resolve => setTimeout(resolve, 2000));
         }
-        
-        this.emit('log', `✅ All ${this.users.length} users started successfully`);
     }
 }
 
-module.exports = SmartClientPanel; responseData.error || responseData.message;
-                    if (typeof errorMsg === 'string' && 
-                        (errorMsg.toLowerCase().includes('login') || 
-                         errorMsg.toLowerCase().includes('session') ||
-                         errorMsg.toLowerCase().includes('unauthorized'))) {
-                        this.emit('log', `🔒 API error indicates session expired [${user.username}]`);
-                        user.sessionValid = false;
-                        user.isLoggedIn = false;
-                        throw new Error('SESSION_EXPIRED');
-                    }
-                }
-                
-                user.sessionValid = true;
-                user.isLoggedIn = true;
-                user.consecutiveFailures = 0;
-                return responseData;
-            }
-
-            this.emit('log', `⚠️ Unexpected response type [${user.username}]: ${typeof responseData}`);
-            throw new Error('INVALID_RESPONSE');
-
-        } catch (error) {
-            if (error.response) {
-                const statusCode = error.response.status;
-                
-                if (statusCode === 302 || statusCode === 301 || statusCode === 401 || statusCode === 403) {
-                    this.emit('log', `🔒 HTTP ${statusCode} [${user.username}] - session expired`);
-                    user.sessionValid = false;
-                    user.isLoggedIn = false;
-                    throw new Error('SESSION_EXPIRED');
-                }
-                
-                if (statusCode >= 500) {
-                    this.emit('log', `⚠️ Server error ${statusCode} [${user.username}]`);
-                    throw new Error('SERVER_ERROR');
-                }
-            }
-
-            const errorCode = error.code;
-            if (errorCode === 'ETIMEDOUT' || errorCode === 'ECONNRESET' || 
-                errorCode === 'ENOTFOUND' || errorCode === 'ECONNREFUSED' ||
-                errorCode === 'EHOSTUNREACH') {
-                this.emit('log', `⚠️ Network error [${user.username}]: ${errorCode}`);
-                throw new Error('NETWORK_ERROR');
-            }
-
-            const errorMsg =
+// Export
+module.exports = SmartOtpWorker;
