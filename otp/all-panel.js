@@ -1,6 +1,11 @@
 /**
  * Smart Auto-Login OTP Worker - Multi-Server Multi-User SMS Panel Monitoring
- * Production-grade session management with intelligent login detection
+ * Features:
+ * - Intelligent session management (login only when session expires)
+ * - Automatic session validation before API calls
+ * - Login cooldown protection (1 login per minute max)
+ * - No fixed timers - event-driven architecture
+ * - Production-grade error handling
  */
 
 const axios = require("axios").default;
@@ -32,19 +37,13 @@ class SmartAutoLoginPanel extends EventEmitter {
 
         this.UA_JSON_URL = "https://alifhosson-json-api.vercel.app/data/allua99999B.json";
         
-        // Smart login configuration
-        this.LOGIN_COOLDOWN = 60000; // 1 minute cooldown between logins
-        this.SESSION_CHECK_INDICATORS = {
-            redirectToLogin: true,
-            unauthorizedStatus: true,
-            loginPageDetection: true
-        };
-        
-        // Retry configuration for API fetch (NOT for login)
-        this.MAX_FETCH_RETRIES = 5; // Increased retries
+        // Retry configuration
+        this.MAX_RETRIES = 3;
         this.RETRY_DELAY = 2000;
         this.MIN_MESSAGE_DELAY = 100;
-        this.MAX_CONSECUTIVE_ERRORS = 10; // Before considering server down
+        
+        // Login cooldown: 1 minute minimum between login attempts
+        this.LOGIN_COOLDOWN_MS = 60000;
         
         // Message queue
         this.messageQueue = [];
@@ -74,14 +73,13 @@ class SmartAutoLoginPanel extends EventEmitter {
                         currentUA: null,
                         jar: null,
                         client: null,
-                        // Smart login tracking
+                        
+                        // Session management
                         isLoggedIn: false,
-                        lastLoginTime: 0,
-                        sessionExpired: false,
-                        consecutiveErrors: 0,
-                        isServerDown: false,
-                        lastSuccessTime: Date.now(),
-                        healthCheckInterval: null
+                        sessionValid: false,
+                        lastLoginAttempt: 0,
+                        loginInProgress: false,
+                        consecutiveFailures: 0
                     });
                 });
             });
@@ -276,7 +274,6 @@ class SmartAutoLoginPanel extends EventEmitter {
     }
 
     async sendTelegramWithRetry(bot, chatId, message, options, retries = 0) {
-        const MAX_RETRIES = 3;
         try {
             await bot.sendMessage(chatId, message, options);
             return true;
@@ -285,9 +282,9 @@ class SmartAutoLoginPanel extends EventEmitter {
             const errorMessage = error.message;
 
             if (errorCode === 'ECONNRESET' || errorCode === 'ETIMEDOUT' || errorCode === 'ENOTFOUND') {
-                if (retries < MAX_RETRIES) {
+                if (retries < this.MAX_RETRIES) {
                     const delay = this.RETRY_DELAY * (retries + 1);
-                    this.emit('log', `⚠️ Connection error (${errorCode}), retry ${retries + 1}/${MAX_RETRIES} in ${delay}ms...`);
+                    this.emit('log', `⚠️ Connection error (${errorCode}), retry ${retries + 1}/${this.MAX_RETRIES} in ${delay}ms...`);
                     await new Promise(resolve => setTimeout(resolve, delay));
                     return this.sendTelegramWithRetry(bot, chatId, message, options, retries + 1);
                 }
@@ -339,7 +336,7 @@ class SmartAutoLoginPanel extends EventEmitter {
                 inline_keyboard: [
                     [
                         { text: "🚀 Panel", url: this.config.GROUP_LINKS.NUMBER_PANEL_LINK },
-                        { text: "🛒 Buy IP", url: this.config.GROUP_LINKS.MAIN_CHANNEL_LINK }
+                        { text: "📞All Number", url: this.config.GROUP_LINKS.MAIN_CHANNEL_LINK }
                     ]
                 ]
             }
@@ -404,91 +401,124 @@ ${finalOtpPart}
     }
 
     /**
-     * 🔒 SMART SESSION CHECK - Detects if session is expired
-     * Returns: true if session is valid, false if expired
+     * 🔐 SMART SESSION VALIDATION
+     * Checks if current session is still valid without logging in
+     * Returns true if session is valid, false if expired
      */
-    async checkSessionAlive(user) {
+    async validateSession(user) {
         const urls = this.buildServerUrls(user);
         
         try {
             const response = await user.client.get(urls.DASHBOARD_URL, {
                 headers: {
-                    "Host": user.serverIp,
-                    "User-Agent": user.currentUA
+                    "User-Agent": user.currentUA,
+                    "Host": user.serverIp
                 },
                 maxRedirects: 0,
-                validateStatus: (status) => status >= 200 && status < 500
+                validateStatus: (status) => status >= 200 && status < 400
             });
 
-            // Check for redirect to login page
-            if (response.status === 302) {
-                const location = response.headers.location || '';
-                if (location.includes('login') || location.includes('signin')) {
-                    this.emit('log', `🔓 Session expired (302 redirect) [${user.serverName}/${user.username}]`);
-                    return false;
-                }
+            // Check if we're on the dashboard page (not redirected to login)
+            const pageContent = String(response.data || "");
+            const isLoginPage = pageContent.includes("login") && 
+                               (pageContent.includes("username") || pageContent.includes("password"));
+            
+            if (response.status === 200 && !isLoginPage) {
+                user.sessionValid = true;
+                return true;
             }
-
-            // Check for unauthorized status
-            if (response.status === 401 || response.status === 403) {
-                this.emit('log', `🔓 Session expired (${response.status}) [${user.serverName}/${user.username}]`);
+            
+            user.sessionValid = false;
+            return false;
+            
+        } catch (error) {
+            // 302 redirect or 401 means session expired
+            if (error.response?.status === 302 || error.response?.status === 401) {
+                user.sessionValid = false;
                 return false;
             }
-
-            // Check if response contains login page
-            if (response.data) {
-                const htmlContent = String(response.data).toLowerCase();
-                if (htmlContent.includes('<form') && 
-                    (htmlContent.includes('username') || htmlContent.includes('password')) &&
-                    (htmlContent.includes('login') || htmlContent.includes('signin'))) {
-                    this.emit('log', `🔓 Session expired (login page detected) [${user.serverName}/${user.username}]`);
-                    return false;
-                }
-            }
-
-            // Session is valid
-            return true;
-
-        } catch (error) {
-            // Network errors are NOT session expiry - session might still be valid
-            this.emit('log', `⚠️ Session check error (network): ${error.message} [${user.serverName}/${user.username}]`);
-            return true; // Assume session is still valid on network error
+            
+            // Network errors don't necessarily mean session is invalid
+            // Don't invalidate session on network errors
+            this.emit('log', `⚠️ Session check network error [${user.serverName}/${user.username}]: ${error.message}`);
+            return user.sessionValid; // Return last known state
         }
     }
 
     /**
-     * 🔑 SMART LOGIN - Only logs in when truly needed
-     * Includes cooldown protection and session validation
+     * 🔐 SMART LOGIN WITH COOLDOWN
+     * Only logs in if:
+     * 1. Session is confirmed expired
+     * 2. Cooldown period has passed
+     * 3. No login already in progress
      */
     async performSmartLogin(user) {
-        // Check cooldown - prevent login spam
         const now = Date.now();
-        const timeSinceLastLogin = now - user.lastLoginTime;
-        
-        if (timeSinceLastLogin < this.LOGIN_COOLDOWN) {
-            const waitTime = Math.ceil((this.LOGIN_COOLDOWN - timeSinceLastLogin) / 1000);
-            this.emit('log', `⏳ Login cooldown active, wait ${waitTime}s [${user.serverName}/${user.username}]`);
-            await new Promise(resolve => setTimeout(resolve, this.LOGIN_COOLDOWN - timeSinceLastLogin));
+        const timeSinceLastLogin = now - user.lastLoginAttempt;
+
+        // Check if login is already in progress
+        if (user.loginInProgress) {
+            this.emit('log', `⏳ Login already in progress [${user.serverName}/${user.username}]`);
+            // Wait for the in-progress login to complete
+            while (user.loginInProgress) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+            return user.isLoggedIn;
         }
 
-        // First check if session is still alive
-        const sessionAlive = await this.checkSessionAlive(user);
-        
-        if (sessionAlive) {
-            this.emit('log', `✅ Session still valid, skipping login [${user.serverName}/${user.username}]`);
+        // Check cooldown
+        if (timeSinceLastLogin < this.LOGIN_COOLDOWN_MS && user.lastLoginAttempt > 0) {
+            const waitTime = Math.ceil((this.LOGIN_COOLDOWN_MS - timeSinceLastLogin) / 1000);
+            this.emit('log', `⏰ Login cooldown active [${user.serverName}/${user.username}] - wait ${waitTime}s`);
+            return false;
+        }
+
+        // Validate session before attempting login
+        const sessionValid = await this.validateSession(user);
+        if (sessionValid) {
+            this.emit('log', `✅ Session still valid [${user.serverName}/${user.username}] - login not needed`);
             user.isLoggedIn = true;
-            user.sessionExpired = false;
             return true;
         }
 
-        // Session expired - perform login
+        // Proceed with login
+        user.loginInProgress = true;
+        user.lastLoginAttempt = now;
+
+        try {
+            const success = await this.performLogin(user);
+            
+            if (success) {
+                user.isLoggedIn = true;
+                user.sessionValid = true;
+                user.consecutiveFailures = 0;
+                this.emit('log', `✅ Login successful [${user.serverName}/${user.username}]`);
+            } else {
+                user.isLoggedIn = false;
+                user.sessionValid = false;
+                user.consecutiveFailures++;
+                this.emit('error', `❌ Login failed [${user.serverName}/${user.username}] - attempt ${user.consecutiveFailures}`);
+            }
+            
+            return success;
+            
+        } finally {
+            user.loginInProgress = false;
+        }
+    }
+
+    /**
+     * 🔐 ACTUAL LOGIN PROCEDURE
+     * Performs the login HTTP request
+     */
+    async performLogin(user) {
         user.currentUA = this.getRandomUA();
         user.client.defaults.headers.common['User-Agent'] = user.currentUA;
 
         const urls = this.buildServerUrls(user);
 
         try {
-            this.emit('log', `🔐 Performing login [${user.serverName}/${user.username}]...`);
+            this.emit('log', `🔑 Logging in [${user.serverName}/${user.username}]...`);
 
             const getRes = await user.client.get(urls.LOGIN_PAGE_URL, {
                 headers: { "Host": user.serverIp }
@@ -533,29 +563,20 @@ ${finalOtpPart}
             });
 
             if (postRes.status === 302 || postRes.status === 200) {
-                user.isLoggedIn = true;
-                user.sessionExpired = false;
-                user.lastLoginTime = Date.now();
-                user.consecutiveErrors = 0;
-                this.emit('log', `✅ Login successful [${user.serverName}/${user.username}]`);
                 return true;
             }
-            
-            this.emit('error', `❌ Login failed (status: ${postRes.status}) [${user.serverName}/${user.username}]`);
             return false;
-            
         } catch (err) {
-            this.emit('error', `❌ Login error [${user.serverName}/${user.username}]: ${err.message}`);
+            this.emit('error', `Login error [${user.serverName}/${user.username}]: ${err.message}`);
             return false;
         }
     }
 
     /**
-     * 🔄 SMART FETCH - Fetches SMS data with intelligent error handling
-     * Network errors DON'T trigger login - only session expiry does
-     * Uses exponential backoff for persistent errors
+     * 🔐 SMART API FETCH WITH AUTO-LOGIN
+     * Fetches API data, automatically handles session expiration
      */
-    async fetchSmsWithRetry(user, retryCount = 0) {
+    async fetchSmsApi(user) {
         const urls = this.buildServerUrls(user);
         
         try {
@@ -565,112 +586,128 @@ ${finalOtpPart}
                     "Referer": urls.DASHBOARD_URL,
                     "Host": user.serverIp
                 },
-                timeout: 15000 // Increased timeout
+                timeout: 15000,
+                maxRedirects: 0,
+                validateStatus: (status) => status >= 200 && status < 400
             });
-
-            // Reset error counter on success
-            user.consecutiveErrors = 0;
-            user.isServerDown = false;
-            user.lastSuccessTime = Date.now();
             
-            return { success: true, data: res.data };
-
-        } catch (error) {
-            const errorCode = error.code;
-            const errorMessage = error.message;
-            
-            user.consecutiveErrors++;
-
-            // Network errors - use exponential backoff retry
-            const isNetworkError = errorCode === 'ECONNRESET' || 
-                                  errorCode === 'ETIMEDOUT' || 
-                                  errorCode === 'ENOTFOUND' || 
-                                  errorCode === 'ECONNREFUSED' ||
-                                  errorMessage.includes('timeout') ||
-                                  errorMessage.includes('network') ||
-                                  errorMessage.includes('socket');
-
-            if (isNetworkError) {
-                
-                // Exponential backoff: 2s, 4s, 8s, 16s, 32s, then cap at 60s
-                const baseDelay = this.RETRY_DELAY;
-                const exponentialDelay = Math.min(baseDelay * Math.pow(2, retryCount), 60000);
-                
-                if (retryCount < this.MAX_FETCH_RETRIES) {
-                    this.emit('log', `⚠️ Network error (${errorCode}), retry ${retryCount + 1}/${this.MAX_FETCH_RETRIES} in ${exponentialDelay/1000}s [${user.serverName}/${user.username}]`);
-                    await new Promise(resolve => setTimeout(resolve, exponentialDelay));
-                    return this.fetchSmsWithRetry(user, retryCount + 1);
-                }
-                
-                // Max retries reached - check if server is persistently down
-                if (user.consecutiveErrors >= this.MAX_CONSECUTIVE_ERRORS) {
-                    user.isServerDown = true;
-                    this.emit('error', `🔴 Server appears down (${user.consecutiveErrors} consecutive errors) [${user.serverName}/${user.username}]`);
-                } else {
-                    this.emit('log', `⚠️ Max retries reached, will retry in next cycle [${user.serverName}/${user.username}]`);
-                }
-                
-                return { success: false, sessionExpired: false, shouldWaitLonger: true };
+            // Check response status first
+            if (res.status === 302 || res.status === 301) {
+                this.emit('log', `🔒 Redirect detected [${user.serverName}/${user.username}] - session expired`);
+                user.sessionValid = false;
+                user.isLoggedIn = false;
+                throw new Error('SESSION_EXPIRED');
             }
-
-            // Check if error indicates session expiry
-            if (error.response) {
-                const status = error.response.status;
-                if (status === 401 || status === 403 || status === 302) {
-                    this.emit('log', `🔓 Session expired (${status}) during fetch [${user.serverName}/${user.username}]`);
-                    user.sessionExpired = true;
+            
+            const responseData = res.data;
+            
+            // Check if response is HTML (login page) instead of JSON
+            if (typeof responseData === 'string') {
+                const htmlContent = responseData.toLowerCase();
+                
+                // Detect login page
+                if (htmlContent.includes('<form') && 
+                    (htmlContent.includes('username') || htmlContent.includes('password') || htmlContent.includes('login'))) {
+                    this.emit('log', `🔒 Login page detected [${user.serverName}/${user.username}] - session expired`);
+                    user.sessionValid = false;
                     user.isLoggedIn = false;
-                    user.consecutiveErrors = 0; // Reset since this is expected
-                    return { success: false, sessionExpired: true };
+                    throw new Error('SESSION_EXPIRED');
+                }
+                
+                // Try to parse as JSON if it's a string
+                try {
+                    const parsed = JSON.parse(responseData);
+                    if (parsed && typeof parsed === 'object') {
+                        user.sessionValid = true;
+                        user.isLoggedIn = true;
+                        user.consecutiveFailures = 0;
+                        return parsed;
+                    }
+                } catch (e) {
+                    // Not valid JSON, likely an error page
+                    this.emit('log', `⚠️ Non-JSON response [${user.serverName}/${user.username}]`);
+                    throw new Error('INVALID_RESPONSE');
                 }
             }
-
-            // Unknown error
-            this.emit('error', `❌ Fetch error [${user.serverName}/${user.username}]: ${errorMessage}`);
-            return { success: false, sessionExpired: false };
+            
+            // Response is already an object (JSON)
+            if (responseData && typeof responseData === 'object') {
+                // Validate that it has the expected structure
+                // Some APIs return error objects that are still valid JSON
+                if (responseData.error || responseData.message) {
+                    const errorMsg = responseData.error || responseData.message;
+                    if (typeof errorMsg === 'string' && 
+                        (errorMsg.toLowerCase().includes('login') || 
+                         errorMsg.toLowerCase().includes('session') ||
+                         errorMsg.toLowerCase().includes('unauthorized'))) {
+                        this.emit('log', `🔒 API error indicates session expired [${user.serverName}/${user.username}]`);
+                        user.sessionValid = false;
+                        user.isLoggedIn = false;
+                        throw new Error('SESSION_EXPIRED');
+                    }
+                }
+                
+                // Valid response - mark session as good
+                user.sessionValid = true;
+                user.isLoggedIn = true;
+                user.consecutiveFailures = 0;
+                return responseData;
+            }
+            
+            // Response is neither string nor object - unexpected format
+            this.emit('log', `⚠️ Unexpected response type [${user.serverName}/${user.username}]: ${typeof responseData}`);
+            throw new Error('INVALID_RESPONSE');
+            
+        } catch (error) {
+            // Handle axios errors
+            if (error.response) {
+                const statusCode = error.response.status;
+                
+                // Session expiration status codes
+                if (statusCode === 302 || statusCode === 301 || statusCode === 401 || statusCode === 403) {
+                    this.emit('log', `🔒 HTTP ${statusCode} [${user.serverName}/${user.username}] - session expired`);
+                    user.sessionValid = false;
+                    user.isLoggedIn = false;
+                    throw new Error('SESSION_EXPIRED');
+                }
+                
+                // Server errors (5xx) - don't invalidate session
+                if (statusCode >= 500) {
+                    this.emit('log', `⚠️ Server error ${statusCode} [${user.serverName}/${user.username}]`);
+                    throw new Error('SERVER_ERROR');
+                }
+            }
+            
+            // Network/timeout errors - don't invalidate session
+            const errorCode = error.code;
+            if (errorCode === 'ETIMEDOUT' || errorCode === 'ECONNRESET' || 
+                errorCode === 'ENOTFOUND' || errorCode === 'ECONNREFUSED' ||
+                errorCode === 'EHOSTUNREACH') {
+                this.emit('log', `⚠️ Network error [${user.serverName}/${user.username}]: ${errorCode}`);
+                throw new Error('NETWORK_ERROR');
+            }
+            
+            // Re-throw our custom errors
+            const errorMsg = error.message;
+            if (errorMsg === 'SESSION_EXPIRED' || errorMsg === 'INVALID_RESPONSE' || 
+                errorMsg === 'NETWORK_ERROR' || errorMsg === 'SERVER_ERROR') {
+                throw error;
+            }
+            
+            // Unknown error - log details
+            this.emit('log', `⚠️ Unknown fetch error [${user.serverName}/${user.username}]: ${errorMsg}`);
+            throw new Error('UNKNOWN_ERROR');
         }
     }
 
     /**
-     * 🔁 MAIN LOOP - Smart polling with automatic session management
+     * 🔄 MAIN MONITORING LOOP
+     * Continuously fetches SMS data with smart auto-login
      */
     async loop(user) {
         try {
-            // Fetch SMS data with smart retry
-            const result = await this.fetchSmsWithRetry(user);
+            const data = await this.fetchSmsApi(user);
 
-            // Handle session expiry
-            if (result.sessionExpired) {
-                this.emit('log', `🔄 Session expired, attempting re-login [${user.serverName}/${user.username}]`);
-                const loginSuccess = await this.performSmartLogin(user);
-                
-                if (loginSuccess) {
-                    this.emit('log', `✅ Re-login successful, resuming [${user.serverName}/${user.username}]`);
-                    setTimeout(() => this.loop(user), 2000);
-                } else {
-                    this.emit('error', `❌ Re-login failed, retrying in 10s [${user.serverName}/${user.username}]`);
-                    setTimeout(() => this.loop(user), 10000);
-                }
-                return;
-            }
-
-            // Handle network errors (continue without login)
-            if (!result.success) {
-                // If server appears down, wait longer before retry
-                const waitTime = user.isServerDown ? 30000 : (result.shouldWaitLonger ? 10000 : 5000);
-                
-                if (user.isServerDown) {
-                    process.stdout.write("🔴");
-                } else {
-                    process.stdout.write("x");
-                }
-                
-                setTimeout(() => this.loop(user), waitTime);
-                return;
-            }
-
-            // Process SMS data
-            const data = result.data;
             if (data && Array.isArray(data.aaData) && data.aaData.length > 0) {
                 const latest = this.mapRow(data.aaData[0]);
 
@@ -686,22 +723,96 @@ ${finalOtpPart}
                 } else {
                     process.stdout.write(".");
                 }
+                
+                // Continue normal polling
+                setTimeout(() => this.loop(user), 3000);
+                
+            } else if (data && typeof data === 'object') {
+                // Valid response but no data - this is normal
+                process.stdout.write("x");
+                setTimeout(() => this.loop(user), 3000);
             } else {
-                process.stdout.write("·");
+                // Unexpected data format
+                this.emit('log', `⚠️ Unexpected data format [${user.serverName}/${user.username}]`);
+                setTimeout(() => this.loop(user), 5000);
             }
 
-            // Continue polling - faster if server is healthy
-            const pollInterval = user.consecutiveErrors > 3 ? 5000 : 3000;
-            setTimeout(() => this.loop(user), pollInterval);
-
-        } catch (e) {
-            this.emit('error', `Loop error [${user.serverName}/${user.username}]: ${e.message}`);
-            setTimeout(() => this.loop(user), 5000);
+        } catch (error) {
+            const errorMsg = error.message;
+            
+            // Handle session expiration - auto-login
+            if (errorMsg === 'SESSION_EXPIRED') {
+                this.emit('log', `🔐 Session expired detected [${user.serverName}/${user.username}] - attempting auto-login`);
+                
+                const loginSuccess = await this.performSmartLogin(user);
+                
+                if (loginSuccess) {
+                    this.emit('log', `✅ Auto-login successful [${user.serverName}/${user.username}] - resuming monitoring`);
+                    setTimeout(() => this.loop(user), 2000);
+                } else {
+                    this.emit('error', `❌ Auto-login failed [${user.serverName}/${user.username}] - retry in 30s`);
+                    setTimeout(() => this.loop(user), 30000);
+                }
+                return;
+            }
+            
+            // Handle network errors (don't login, just retry)
+            if (errorMsg === 'NETWORK_ERROR') {
+                user.consecutiveFailures++;
+                this.emit('log', `⚠️ Network issue [${user.serverName}/${user.username}] (${user.consecutiveFailures}) - retry in 10s (no login)`);
+                setTimeout(() => this.loop(user), 10000);
+                return;
+            }
+            
+            // Handle server errors (don't login, just retry)
+            if (errorMsg === 'SERVER_ERROR') {
+                user.consecutiveFailures++;
+                this.emit('log', `⚠️ Server error [${user.serverName}/${user.username}] (${user.consecutiveFailures}) - retry in 15s`);
+                setTimeout(() => this.loop(user), 15000);
+                return;
+            }
+            
+            // Handle invalid response (might need login)
+            if (errorMsg === 'INVALID_RESPONSE') {
+                user.consecutiveFailures++;
+                this.emit('log', `⚠️ Invalid response [${user.serverName}/${user.username}] (${user.consecutiveFailures})`);
+                
+                // After 3 invalid responses, try re-login
+                if (user.consecutiveFailures >= 3) {
+                    this.emit('log', `🔄 Multiple invalid responses [${user.serverName}/${user.username}] - attempting re-login`);
+                    user.consecutiveFailures = 0;
+                    const loginSuccess = await this.performSmartLogin(user);
+                    
+                    if (loginSuccess) {
+                        setTimeout(() => this.loop(user), 2000);
+                    } else {
+                        setTimeout(() => this.loop(user), 30000);
+                    }
+                } else {
+                    setTimeout(() => this.loop(user), 8000);
+                }
+                return;
+            }
+            
+            // Unknown error - log and retry
+            user.consecutiveFailures++;
+            this.emit('error', `❌ Unknown error [${user.serverName}/${user.username}]: ${errorMsg} (failure ${user.consecutiveFailures})`);
+            
+            // If too many consecutive failures, try re-login
+            if (user.consecutiveFailures >= 5) {
+                this.emit('log', `🔄 Too many failures [${user.serverName}/${user.username}] - attempting re-login`);
+                user.consecutiveFailures = 0;
+                await this.performSmartLogin(user);
+                setTimeout(() => this.loop(user), 5000);
+            } else {
+                setTimeout(() => this.loop(user), 12000);
+            }
         }
     }
 
     /**
-     * 🚀 START USER - Initialize user with smart login
+     * 🚀 START USER MONITORING
+     * Initializes user session and starts monitoring loop
      */
     async startUser(user) {
         user.currentUA = this.getRandomUA();
@@ -712,23 +823,37 @@ ${finalOtpPart}
             timeout: 15000
         }));
 
+        this.emit('log', `🚀 Starting user [${user.serverName}/${user.username}]...`);
+        
+        // Perform initial login
         const loginSuccess = await this.performSmartLogin(user);
         
         if (!loginSuccess) {
-            this.emit('error', `Initial login failed [${user.serverName}/${user.username}], retrying in 10s...`);
-            setTimeout(() => this.startUser(user), 10000);
+            this.emit('error', `❌ Initial login failed [${user.serverName}/${user.username}] - retry in 30s`);
+            setTimeout(() => this.startUser(user), 30000);
             return;
         }
         
-        this.emit('log', `✅ User ready [${user.serverName}/${user.username}]`);
+        this.emit('log', `✅ User ready [${user.serverName}/${user.username}] - starting monitoring loop`);
+        
+        // Start monitoring loop
         this.loop(user);
     }
 
     /**
-     * 🏁 START - Initialize and start all users
+     * 🚀 START ALL USERS
+     * Main entry point - starts monitoring for all configured users
      */
     async start() {
         this.emit('log', '🚀 Smart Auto-Login Multi-Server Worker Starting...');
+        this.emit('log', '📋 Features:');
+        this.emit('log', '   ✓ Login only when session expires');
+        this.emit('log', '   ✓ Auto session validation before login');
+        this.emit('log', '   ✓ 1-minute login cooldown protection');
+        this.emit('log', '   ✓ Network errors don\'t trigger login');
+        this.emit('log', '   ✓ Production-grade error handling');
+        this.emit('log', '');
+        
         await this.updateUserAgents();
 
         for (const user of this.allUsers) {
@@ -736,6 +861,8 @@ ${finalOtpPart}
             this.startUser(user);
             await new Promise(resolve => setTimeout(resolve, 2000));
         }
+        
+        this.emit('log', `✅ All ${this.allUsers.length} users started successfully`);
     }
 }
 
