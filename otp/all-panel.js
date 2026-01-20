@@ -1,11 +1,6 @@
 /**
- * Smart Auto-Login OTP Worker - Multi-Server Multi-User SMS Panel Monitoring
- * Features:
- * - Intelligent session management (login only when session expires)
- * - Automatic session validation before API calls
- * - Login cooldown protection (1 login per minute max)
- * - No fixed timers - event-driven architecture
- * - Production-grade error handling
+ * UNIVERSAL OTP WORKER - Multi-Server SMS Panel Monitoring
+ * Loads all servers from servers-config.json
  */
 
 const axios = require("axios").default;
@@ -20,7 +15,7 @@ const EventEmitter = require("events");
 const fs = require("fs");
 const path = require("path");
 
-class SmartAutoLoginPanel extends EventEmitter {
+class UniversalOtpWorker extends EventEmitter {
     constructor() {
         super();
         this.config = null;
@@ -36,100 +31,52 @@ class SmartAutoLoginPanel extends EventEmitter {
         ];
 
         this.UA_JSON_URL = "https://alifhosson-json-api.vercel.app/data/allua99999B.json";
-        
-        // Retry configuration
-        this.MAX_RETRIES = 3;
-        this.RETRY_DELAY = 2000;
-        this.MIN_MESSAGE_DELAY = 100;
-        
-        // Login cooldown: 1 minute minimum between login attempts
-        this.LOGIN_COOLDOWN_MS = 60000;
-        
-        // Message queue
-        this.messageQueue = [];
-        this.isProcessingQueue = false;
     }
 
-    loadServerConfig() {
+    loadServersConfig() {
         try {
             const configPath = path.join(__dirname, 'pass.json');
             const configData = fs.readFileSync(configPath, 'utf8');
-            const passConfig = JSON.parse(configData);
+            const serversConfig = JSON.parse(configData);
+
+            this.servers = serversConfig.servers.filter(s => s.enabled);
             
-            this.servers = passConfig.servers;
-            this.emit('log', `✅ Loaded ${this.servers.length} servers from pass.json`);
-            
-            // Initialize all users from all servers
+            // প্রতিটা server থেকে users নিয়ে আসা
             this.servers.forEach(server => {
-                server.users.forEach(userConfig => {
+                server.users.forEach(user => {
                     this.allUsers.push({
                         serverName: server.name,
-                        serverType: server.type,
                         serverIp: server.server_ip,
+                        protocol: server.protocol,
                         basePath: server.base_path,
-                        username: userConfig.username,
-                        password: userConfig.password,
+                        username: user.username,
+                        password: user.password,
                         lastId: null,
                         currentUA: null,
                         jar: null,
-                        client: null,
-                        
-                        // Session management
-                        isLoggedIn: false,
-                        sessionValid: false,
-                        lastLoginAttempt: 0,
-                        loginInProgress: false,
-                        consecutiveFailures: 0
+                        client: null
                     });
                 });
             });
-            
-            this.emit('log', `✅ Initialized ${this.allUsers.length} total users across all servers`);
-        } catch (error) {
-            this.emit('error', `Failed to load pass.json: ${error.message}`);
-            throw error;
-        }
-    }
 
-    buildServerUrls(user) {
-        const protocol = user.serverType === 'https' ? 'https' : 'http';
-        const baseUrl = `${protocol}://${user.serverIp}${user.basePath}`;
-        
-        return {
-            BASE_URL: baseUrl,
-            LOGIN_PAGE_URL: `${baseUrl}/login`,
-            LOGIN_POST_URL: `${baseUrl}/signin`,
-            DASHBOARD_URL: `${baseUrl}/client/SMSCDRStats`,
-            API_BASE_URL: `${baseUrl}/client/res/data_smscdr.php`
-        };
+            this.emit('log', `✅ Loaded ${this.servers.length} servers with ${this.allUsers.length} total users`);
+            return true;
+        } catch (error) {
+            this.emit('error', `Failed to load servers-config.json: ${error.message}`);
+            return false;
+        }
     }
 
     setConfig(config) {
         this.config = config;
-        this.loadServerConfig();
         this.initializeBots();
         this.initializeDatabase();
     }
 
     initializeBots() {
         try {
-            const botOptions = {
-                polling: false,
-                request: {
-                    agentOptions: {
-                        keepAlive: true,
-                        keepAliveMsecs: 10000
-                    },
-                    timeout: 30000
-                }
-            };
-
-            this.botGroup = new TelegramBot(this.config.BOT_TOKENS.NOTIFICATION_BOT, botOptions);
-            this.botUser = new TelegramBot(this.config.BOT_TOKENS.USER_BOT, botOptions);
-            
-            this.botGroup.deleteWebHook().catch(() => {});
-            this.botUser.deleteWebHook().catch(() => {});
-            
+            this.botGroup = new TelegramBot(this.config.BOT_TOKENS.NOTIFICATION_BOT, { polling: false });
+            this.botUser = new TelegramBot(this.config.BOT_TOKENS.USER_BOT, { polling: false });
             this.emit('log', '✅ Bots initialized successfully');
         } catch (e) {
             this.emit('error', `Bot initialization failed: ${e.message}`);
@@ -151,8 +98,8 @@ class SmartAutoLoginPanel extends EventEmitter {
             serverSelectionTimeoutMS: 30000,
             socketTimeoutMS: 45000,
             family: 4,
-            maxPoolSize: 10,
-            minPoolSize: 1,
+            maxPoolSize: 100,
+            minPoolSize: 5,
         };
 
         const conn = mongoose.createConnection(this.config.NUMBER_DB_URI, dbOptions);
@@ -192,12 +139,18 @@ class SmartAutoLoginPanel extends EventEmitter {
         return `${year}-${month}-${day}`;
     }
 
-    getApiUrl(user) {
-        const urls = this.buildServerUrls(user);
+    getServerUrls(user) {
+        const baseUrl = `${user.protocol}://${user.serverIp}${user.basePath}`;
         const today = this.getTodayDate();
         const fdate1 = encodeURIComponent(`${today} 00:00:00`);
         const fdate2 = encodeURIComponent(`${today} 23:59:59`);
-        return `${urls.API_BASE_URL}?fdate1=${fdate1}&fdate2=${fdate2}&frange=&fnum=&fcli=&fgdate=&fgmonth=&fgrange=&fgnumber=&fgcli=&fg=0&sEcho=1&iColumns=7&sColumns=%2C%2C%2C%2C%2C%2C&iDisplayStart=0&iDisplayLength=25&mDataProp_0=0&sSearch_0=&bRegex_0=false&bSearchable_0=true&bSortable_0=true&mDataProp_1=1&sSearch_1=&bRegex_1=false&bSearchable_1=true&bSortable_1=true&mDataProp_2=2&sSearch_2=&bRegex_2=false&bSearchable_2=true&bSortable_2=true&mDataProp_3=3&sSearch_3=&bRegex_3=false&bSearchable_3=true&bSortable_3=true&mDataProp_4=4&sSearch_4=&bRegex_4=false&bSearchable_4=true&bSortable_4=true&mDataProp_5=5&sSearch_5=&bRegex_5=false&bSearchable_5=true&bSortable_5=true&mDataProp_6=6&sSearch_6=&bRegex_6=false&bSearchable_6=true&bSortable_6=true&sSearch=&bRegex=false&iSortCol_0=0&sSortDir_0=desc&iSortingCols=1`;
+
+        return {
+            LOGIN_PAGE_URL: `${baseUrl}/login`,
+            LOGIN_POST_URL: `${baseUrl}/signin`,
+            DASHBOARD_URL: `${baseUrl}/client/SMSCDRStats`,
+            API_URL: `${baseUrl}/client/res/data_smscdr.php?fdate1=${fdate1}&fdate2=${fdate2}&frange=&fnum=&fcli=&fgdate=&fgmonth=&fgrange=&fgnumber=&fgcli=&fg=0&sEcho=1&iColumns=7&sColumns=%2C%2C%2C%2C%2C%2C&iDisplayStart=0&iDisplayLength=25&mDataProp_0=0&sSearch_0=&bRegex_0=false&bSearchable_0=true&bSortable_0=true&mDataProp_1=1&sSearch_1=&bRegex_1=false&bSearchable_1=true&bSortable_1=true&mDataProp_2=2&sSearch_2=&bRegex_2=false&bSearchable_2=true&bSortable_2=true&mDataProp_3=3&sSearch_3=&bRegex_3=false&bSearchable_3=true&bSortable_3=true&mDataProp_4=4&sSearch_4=&bRegex_4=false&bSearchable_4=true&bSortable_4=true&mDataProp_5=5&sSearch_5=&bRegex_5=false&bSearchable_5=true&bSortable_5=true&mDataProp_6=6&sSearch_6=&bRegex_6=false&bSearchable_6=true&bSortable_6=true&sSearch=&bRegex=false&iSortCol_0=0&sSortDir_0=desc&iSortingCols=1`
+        };
     }
 
     extractOtp(text) {
@@ -247,80 +200,21 @@ class SmartAutoLoginPanel extends EventEmitter {
         };
     }
 
-    async queueMessage(sendFunction) {
-        return new Promise((resolve, reject) => {
-            this.messageQueue.push({ sendFunction, resolve, reject });
-            this.processQueue();
-        });
-    }
-
-    async processQueue() {
-        if (this.isProcessingQueue || this.messageQueue.length === 0) return;
-        
-        this.isProcessingQueue = true;
-        
-        while (this.messageQueue.length > 0) {
-            const { sendFunction, resolve, reject } = this.messageQueue.shift();
-            try {
-                const result = await sendFunction();
-                resolve(result);
-            } catch (error) {
-                reject(error);
-            }
-            await new Promise(res => setTimeout(res, this.MIN_MESSAGE_DELAY));
-        }
-        
-        this.isProcessingQueue = false;
-    }
-
-    async sendTelegramWithRetry(bot, chatId, message, options, retries = 0) {
-        try {
-            await bot.sendMessage(chatId, message, options);
-            return true;
-        } catch (error) {
-            const errorCode = error.code;
-            const errorMessage = error.message;
-
-            if (errorCode === 'ECONNRESET' || errorCode === 'ETIMEDOUT' || errorCode === 'ENOTFOUND') {
-                if (retries < this.MAX_RETRIES) {
-                    const delay = this.RETRY_DELAY * (retries + 1);
-                    this.emit('log', `⚠️ Connection error (${errorCode}), retry ${retries + 1}/${this.MAX_RETRIES} in ${delay}ms...`);
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                    return this.sendTelegramWithRetry(bot, chatId, message, options, retries + 1);
-                }
-            }
-
-            if (errorMessage.includes('429') || errorMessage.includes('Too Many Requests')) {
-                const retryAfter = error.response?.parameters?.retry_after || 5;
-                this.emit('log', `⚠️ Rate limited, waiting ${retryAfter}s...`);
-                await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
-                return this.sendTelegramWithRetry(bot, chatId, message, options, retries);
-            }
-
-            if (errorMessage.includes('403') || errorMessage.includes('Forbidden')) {
-                this.emit('error', `❌ Bot blocked by user/chat: ${chatId}`);
-                return false;
-            }
-
-            throw error;
-        }
-    }
-
     async sendToGroup(sms) {
         const otp = this.extractOtp(sms.message) || "N/A";
         const { name: countryName, flag } = sms.countryData;
         const service = sms.cli || "Service";
 
         let maskedNumber = sms.number;
-        if (maskedNumber && maskedNumber.length >= 8) {
-            const visibleStart = maskedNumber.substring(0, 4);
+        if (maskedNumber && maskedNumber.length >= 7) {
+            const visibleStart = maskedNumber.substring(0, 6);
             const visibleEnd = maskedNumber.substring(maskedNumber.length - 4);
             maskedNumber = `${visibleStart}𝚂𝙼𝚂${visibleEnd}`;
         }
 
-        const finalMsg = `${flag} <b>${countryName} ${service} Otp Code Received Successfully</b> 🎉
+        const finalMsg = `✅ ${flag} <b>${countryName} ${service} Otp Code Received Successfully</b> 🎉
 
-📍 <b>𝗬𝗼𝘂𝗿 𝗢𝗧𝗣:</b>  <code>${otp}</code>
+🔑 <b>𝗬𝗼𝘂𝗿 𝗢𝗧𝗣:</b>  <code>${otp}</code>
 
 ☎️ <b>Number:</b> <code>${maskedNumber}</code>
 ⚙️ <b>Service:</b> ${service}
@@ -343,17 +237,10 @@ class SmartAutoLoginPanel extends EventEmitter {
         };
 
         try {
-            const success = await this.queueMessage(() =>
-                this.sendTelegramWithRetry(this.botGroup, this.config.GROUP_LINKS.OTP_GROUP_ID, finalMsg, options)
-            );
-
-            if (success) {
-                this.emit('sms', `✅ Group message sent: ${otp}`);
-            } else {
-                this.emit('error', `❌ Failed to send group message after retries`);
-            }
+            await this.botGroup.sendMessage(this.config.GROUP_LINKS.OTP_GROUP_ID, finalMsg, options);
+            this.emit('sms', `✅ Group message sent: ${otp}`);
         } catch (e) {
-            this.emit('error', `Group send failed: ${e.code || 'UNKNOWN'}: ${e.message}`);
+            this.emit('error', `Group send failed: ${e.message}`);
         }
     }
 
@@ -376,7 +263,7 @@ class SmartAutoLoginPanel extends EventEmitter {
 
                 let finalOtpPart = "";
                 if (otp) {
-                    finalOtpPart = `📍 OTP : <code>${otp}</code>`;
+                    finalOtpPart = `🔑 OTP : <code>${otp}</code>`;
                 }
 
                 const finalMsg = `🌎 Country : ${dbCountryName} ${flag}
@@ -385,143 +272,26 @@ ${finalOtpPart}
 
 ✅ Stay With Us.💖`;
 
-                const success = await this.queueMessage(() =>
-                    this.sendTelegramWithRetry(this.botUser, userId, finalMsg, { parse_mode: "HTML" })
-                );
-
-                if (success) {
-                    this.emit('sms', `✅ Private OTP sent to User: ${userId}`);
-                } else {
-                    this.emit('error', `❌ Failed to send to user ${userId} after retries`);
-                }
+                await this.botUser.sendMessage(userId, finalMsg, { parse_mode: "HTML" });
+                this.emit('sms', `✅ Private OTP sent to User: ${userId}`);
             }
         } catch (e) {
-            this.emit('error', `User send failed: ${e.code || 'UNKNOWN'}: ${e.message}`);
+            this.emit('error', `User send failed: ${e.message}`);
         }
     }
 
-    /**
-     * 🔐 SMART SESSION VALIDATION
-     * Checks if current session is still valid without logging in
-     * Returns true if session is valid, false if expired
-     */
-    async validateSession(user) {
-        const urls = this.buildServerUrls(user);
-        
-        try {
-            const response = await user.client.get(urls.DASHBOARD_URL, {
-                headers: {
-                    "User-Agent": user.currentUA,
-                    "Host": user.serverIp
-                },
-                maxRedirects: 0,
-                validateStatus: (status) => status >= 200 && status < 400
-            });
-
-            // Check if we're on the dashboard page (not redirected to login)
-            const pageContent = String(response.data || "");
-            const isLoginPage = pageContent.includes("login") && 
-                               (pageContent.includes("username") || pageContent.includes("password"));
-            
-            if (response.status === 200 && !isLoginPage) {
-                user.sessionValid = true;
-                return true;
-            }
-            
-            user.sessionValid = false;
-            return false;
-            
-        } catch (error) {
-            // 302 redirect or 401 means session expired
-            if (error.response?.status === 302 || error.response?.status === 401) {
-                user.sessionValid = false;
-                return false;
-            }
-            
-            // Network errors don't necessarily mean session is invalid
-            // Don't invalidate session on network errors
-            this.emit('log', `⚠️ Session check network error [${user.serverName}/${user.username}]: ${error.message}`);
-            return user.sessionValid; // Return last known state
-        }
-    }
-
-    /**
-     * 🔐 SMART LOGIN WITH COOLDOWN
-     * Only logs in if:
-     * 1. Session is confirmed expired
-     * 2. Cooldown period has passed
-     * 3. No login already in progress
-     */
-    async performSmartLogin(user) {
-        const now = Date.now();
-        const timeSinceLastLogin = now - user.lastLoginAttempt;
-
-        // Check if login is already in progress
-        if (user.loginInProgress) {
-            this.emit('log', `⏳ Login already in progress [${user.serverName}/${user.username}]`);
-            // Wait for the in-progress login to complete
-            while (user.loginInProgress) {
-                await new Promise(resolve => setTimeout(resolve, 1000));
-            }
-            return user.isLoggedIn;
-        }
-
-        // Check cooldown
-        if (timeSinceLastLogin < this.LOGIN_COOLDOWN_MS && user.lastLoginAttempt > 0) {
-            const waitTime = Math.ceil((this.LOGIN_COOLDOWN_MS - timeSinceLastLogin) / 1000);
-            this.emit('log', `⏰ Login cooldown active [${user.serverName}/${user.username}] - wait ${waitTime}s`);
-            return false;
-        }
-
-        // Validate session before attempting login
-        const sessionValid = await this.validateSession(user);
-        if (sessionValid) {
-            this.emit('log', `✅ Session still valid [${user.serverName}/${user.username}] - login not needed`);
-            user.isLoggedIn = true;
-            return true;
-        }
-
-        // Proceed with login
-        user.loginInProgress = true;
-        user.lastLoginAttempt = now;
-
-        try {
-            const success = await this.performLogin(user);
-            
-            if (success) {
-                user.isLoggedIn = true;
-                user.sessionValid = true;
-                user.consecutiveFailures = 0;
-                this.emit('log', `✅ Login successful [${user.serverName}/${user.username}]`);
-            } else {
-                user.isLoggedIn = false;
-                user.sessionValid = false;
-                user.consecutiveFailures++;
-                this.emit('error', `❌ Login failed [${user.serverName}/${user.username}] - attempt ${user.consecutiveFailures}`);
-            }
-            
-            return success;
-            
-        } finally {
-            user.loginInProgress = false;
-        }
-    }
-
-    /**
-     * 🔐 ACTUAL LOGIN PROCEDURE
-     * Performs the login HTTP request
-     */
     async performLogin(user) {
         user.currentUA = this.getRandomUA();
-        user.client.defaults.headers.common['User-Agent'] = user.currentUA;
-
-        const urls = this.buildServerUrls(user);
+        const urls = this.getServerUrls(user);
 
         try {
-            this.emit('log', `🔑 Logging in [${user.serverName}/${user.username}]...`);
+            this.emit('log', `🔐 Logging in [${user.serverName}/${user.username}]...`);
 
             const getRes = await user.client.get(urls.LOGIN_PAGE_URL, {
-                headers: { "Host": user.serverIp }
+                headers: { 
+                    "User-Agent": user.currentUA,
+                    "Host": user.serverIp 
+                }
             });
 
             const $ = cheerio.load(String(getRes.data || ""));
@@ -548,21 +318,24 @@ ${finalOtpPart}
             $("form input[type=hidden]").each((i, el) => {
                 const name = $(el).attr("name");
                 const val = $(el).attr("value") || "";
-                if (name && !["username", "password", "capt"].includes(name)) formParams.append(name, val);
+                if (name && !["username", "password", "capt"].includes(name)) {
+                    formParams.append(name, val);
+                }
             });
 
             const postRes = await user.client.post(urls.LOGIN_POST_URL, formParams.toString(), {
                 headers: {
                     "Content-Type": "application/x-www-form-urlencoded",
                     "Referer": urls.LOGIN_PAGE_URL,
-                    "Origin": urls.BASE_URL,
-                    "Upgrade-Insecure-Requests": "1"
+                    "User-Agent": user.currentUA,
+                    "Origin": `${user.protocol}://${user.serverIp}`
                 },
                 maxRedirects: 0,
                 validateStatus: s => s >= 200 && s < 400,
             });
 
             if (postRes.status === 302 || postRes.status === 200) {
+                this.emit('log', `✅ Login successful [${user.serverName}/${user.username}]`);
                 return true;
             }
             return false;
@@ -572,138 +345,23 @@ ${finalOtpPart}
         }
     }
 
-    /**
-     * 🔐 SMART API FETCH WITH AUTO-LOGIN
-     * Fetches API data, automatically handles session expiration
-     */
     async fetchSmsApi(user) {
-        const urls = this.buildServerUrls(user);
-        
+        const urls = this.getServerUrls(user);
         try {
-            const res = await user.client.get(this.getApiUrl(user), {
+            const res = await user.client.get(urls.API_URL, {
                 headers: {
+                    "User-Agent": user.currentUA,
                     "X-Requested-With": "XMLHttpRequest",
                     "Referer": urls.DASHBOARD_URL,
                     "Host": user.serverIp
                 },
-                timeout: 15000,
-                maxRedirects: 0,
-                validateStatus: (status) => status >= 200 && status < 400
             });
-            
-            // Check response status first
-            if (res.status === 302 || res.status === 301) {
-                this.emit('log', `🔒 Redirect detected [${user.serverName}/${user.username}] - session expired`);
-                user.sessionValid = false;
-                user.isLoggedIn = false;
-                throw new Error('SESSION_EXPIRED');
-            }
-            
-            const responseData = res.data;
-            
-            // Check if response is HTML (login page) instead of JSON
-            if (typeof responseData === 'string') {
-                const htmlContent = responseData.toLowerCase();
-                
-                // Detect login page
-                if (htmlContent.includes('<form') && 
-                    (htmlContent.includes('username') || htmlContent.includes('password') || htmlContent.includes('login'))) {
-                    this.emit('log', `🔒 Login page detected [${user.serverName}/${user.username}] - session expired`);
-                    user.sessionValid = false;
-                    user.isLoggedIn = false;
-                    throw new Error('SESSION_EXPIRED');
-                }
-                
-                // Try to parse as JSON if it's a string
-                try {
-                    const parsed = JSON.parse(responseData);
-                    if (parsed && typeof parsed === 'object') {
-                        user.sessionValid = true;
-                        user.isLoggedIn = true;
-                        user.consecutiveFailures = 0;
-                        return parsed;
-                    }
-                } catch (e) {
-                    // Not valid JSON, likely an error page
-                    this.emit('log', `⚠️ Non-JSON response [${user.serverName}/${user.username}]`);
-                    throw new Error('INVALID_RESPONSE');
-                }
-            }
-            
-            // Response is already an object (JSON)
-            if (responseData && typeof responseData === 'object') {
-                // Validate that it has the expected structure
-                // Some APIs return error objects that are still valid JSON
-                if (responseData.error || responseData.message) {
-                    const errorMsg = responseData.error || responseData.message;
-                    if (typeof errorMsg === 'string' && 
-                        (errorMsg.toLowerCase().includes('login') || 
-                         errorMsg.toLowerCase().includes('session') ||
-                         errorMsg.toLowerCase().includes('unauthorized'))) {
-                        this.emit('log', `🔒 API error indicates session expired [${user.serverName}/${user.username}]`);
-                        user.sessionValid = false;
-                        user.isLoggedIn = false;
-                        throw new Error('SESSION_EXPIRED');
-                    }
-                }
-                
-                // Valid response - mark session as good
-                user.sessionValid = true;
-                user.isLoggedIn = true;
-                user.consecutiveFailures = 0;
-                return responseData;
-            }
-            
-            // Response is neither string nor object - unexpected format
-            this.emit('log', `⚠️ Unexpected response type [${user.serverName}/${user.username}]: ${typeof responseData}`);
-            throw new Error('INVALID_RESPONSE');
-            
-        } catch (error) {
-            // Handle axios errors
-            if (error.response) {
-                const statusCode = error.response.status;
-                
-                // Session expiration status codes
-                if (statusCode === 302 || statusCode === 301 || statusCode === 401 || statusCode === 403) {
-                    this.emit('log', `🔒 HTTP ${statusCode} [${user.serverName}/${user.username}] - session expired`);
-                    user.sessionValid = false;
-                    user.isLoggedIn = false;
-                    throw new Error('SESSION_EXPIRED');
-                }
-                
-                // Server errors (5xx) - don't invalidate session
-                if (statusCode >= 500) {
-                    this.emit('log', `⚠️ Server error ${statusCode} [${user.serverName}/${user.username}]`);
-                    throw new Error('SERVER_ERROR');
-                }
-            }
-            
-            // Network/timeout errors - don't invalidate session
-            const errorCode = error.code;
-            if (errorCode === 'ETIMEDOUT' || errorCode === 'ECONNRESET' || 
-                errorCode === 'ENOTFOUND' || errorCode === 'ECONNREFUSED' ||
-                errorCode === 'EHOSTUNREACH') {
-                this.emit('log', `⚠️ Network error [${user.serverName}/${user.username}]: ${errorCode}`);
-                throw new Error('NETWORK_ERROR');
-            }
-            
-            // Re-throw our custom errors
-            const errorMsg = error.message;
-            if (errorMsg === 'SESSION_EXPIRED' || errorMsg === 'INVALID_RESPONSE' || 
-                errorMsg === 'NETWORK_ERROR' || errorMsg === 'SERVER_ERROR') {
-                throw error;
-            }
-            
-            // Unknown error - log details
-            this.emit('log', `⚠️ Unknown fetch error [${user.serverName}/${user.username}]: ${errorMsg}`);
-            throw new Error('UNKNOWN_ERROR');
+            return res.data;
+        } catch (e) {
+            throw new Error(`API error: ${e.message}`);
         }
     }
 
-    /**
-     * 🔄 MAIN MONITORING LOOP
-     * Continuously fetches SMS data with smart auto-login
-     */
     async loop(user) {
         try {
             const data = await this.fetchSmsApi(user);
@@ -713,8 +371,10 @@ ${finalOtpPart}
 
                 if (user.lastId === null) {
                     user.lastId = latest.id;
+                    this.emit('log', `🚀 Startup [${user.serverName}/${user.username}]: Sending last message...`);
                     await this.sendToGroup(latest);
                     await this.sendToUser(latest);
+
                 } else if (latest.id !== user.lastId) {
                     user.lastId = latest.id;
                     this.emit('sms', `🔥 New SMS [${user.serverName}/${user.username}]: ${latest.displayId}`);
@@ -723,147 +383,59 @@ ${finalOtpPart}
                 } else {
                     process.stdout.write(".");
                 }
-                
-                // Continue normal polling
+
                 setTimeout(() => this.loop(user), 3000);
-                
-            } else if (data && typeof data === 'object') {
-                // Valid response but no data - this is normal
+            } else {
                 process.stdout.write("x");
                 setTimeout(() => this.loop(user), 3000);
-            } else {
-                // Unexpected data format
-                this.emit('log', `⚠️ Unexpected data format [${user.serverName}/${user.username}]`);
-                setTimeout(() => this.loop(user), 5000);
             }
+        } catch (e) {
+            this.emit('error', `Connection error [${user.serverName}/${user.username}]: ${e.message}`);
+            await new Promise(resolve => setTimeout(resolve, 5000));
 
-        } catch (error) {
-            const errorMsg = error.message;
-            
-            // Handle session expiration - auto-login
-            if (errorMsg === 'SESSION_EXPIRED') {
-                this.emit('log', `🔐 Session expired detected [${user.serverName}/${user.username}] - attempting auto-login`);
-                
-                const loginSuccess = await this.performSmartLogin(user);
-                
-                if (loginSuccess) {
-                    this.emit('log', `✅ Auto-login successful [${user.serverName}/${user.username}] - resuming monitoring`);
-                    setTimeout(() => this.loop(user), 2000);
-                } else {
-                    this.emit('error', `❌ Auto-login failed [${user.serverName}/${user.username}] - retry in 30s`);
-                    setTimeout(() => this.loop(user), 30000);
-                }
-                return;
-            }
-            
-            // Handle network errors (don't login, just retry)
-            if (errorMsg === 'NETWORK_ERROR') {
-                user.consecutiveFailures++;
-                this.emit('log', `⚠️ Network issue [${user.serverName}/${user.username}] (${user.consecutiveFailures}) - retry in 10s (no login)`);
-                setTimeout(() => this.loop(user), 10000);
-                return;
-            }
-            
-            // Handle server errors (don't login, just retry)
-            if (errorMsg === 'SERVER_ERROR') {
-                user.consecutiveFailures++;
-                this.emit('log', `⚠️ Server error [${user.serverName}/${user.username}] (${user.consecutiveFailures}) - retry in 15s`);
-                setTimeout(() => this.loop(user), 15000);
-                return;
-            }
-            
-            // Handle invalid response (might need login)
-            if (errorMsg === 'INVALID_RESPONSE') {
-                user.consecutiveFailures++;
-                this.emit('log', `⚠️ Invalid response [${user.serverName}/${user.username}] (${user.consecutiveFailures})`);
-                
-                // After 3 invalid responses, try re-login
-                if (user.consecutiveFailures >= 3) {
-                    this.emit('log', `🔄 Multiple invalid responses [${user.serverName}/${user.username}] - attempting re-login`);
-                    user.consecutiveFailures = 0;
-                    const loginSuccess = await this.performSmartLogin(user);
-                    
-                    if (loginSuccess) {
-                        setTimeout(() => this.loop(user), 2000);
-                    } else {
-                        setTimeout(() => this.loop(user), 30000);
-                    }
-                } else {
-                    setTimeout(() => this.loop(user), 8000);
-                }
-                return;
-            }
-            
-            // Unknown error - log and retry
-            user.consecutiveFailures++;
-            this.emit('error', `❌ Unknown error [${user.serverName}/${user.username}]: ${errorMsg} (failure ${user.consecutiveFailures})`);
-            
-            // If too many consecutive failures, try re-login
-            if (user.consecutiveFailures >= 5) {
-                this.emit('log', `🔄 Too many failures [${user.serverName}/${user.username}] - attempting re-login`);
-                user.consecutiveFailures = 0;
-                await this.performSmartLogin(user);
-                setTimeout(() => this.loop(user), 5000);
+            const loggedIn = await this.performLogin(user);
+            if (loggedIn) {
+                this.emit('log', `✅ Re-login success [${user.serverName}/${user.username}]`);
+                this.loop(user);
             } else {
-                setTimeout(() => this.loop(user), 12000);
+                this.emit('error', `❌ Re-login failed [${user.serverName}/${user.username}]`);
+                setTimeout(() => this.loop(user), 10000);
             }
         }
     }
 
-    /**
-     * 🚀 START USER MONITORING
-     * Initializes user session and starts monitoring loop
-     */
     async startUser(user) {
         user.currentUA = this.getRandomUA();
         user.jar = new tough.CookieJar();
-        user.client = wrapper(axios.create({ 
-            jar: user.jar, 
-            withCredentials: true,
-            timeout: 15000
-        }));
+        user.client = wrapper(axios.create({ jar: user.jar, withCredentials: true }));
 
-        this.emit('log', `🚀 Starting user [${user.serverName}/${user.username}]...`);
-        
-        // Perform initial login
-        const loginSuccess = await this.performSmartLogin(user);
-        
-        if (!loginSuccess) {
-            this.emit('error', `❌ Initial login failed [${user.serverName}/${user.username}] - retry in 30s`);
-            setTimeout(() => this.startUser(user), 30000);
+        const ok = await this.performLogin(user);
+        if (!ok) {
+            this.emit('error', `Login failed [${user.serverName}/${user.username}], retrying in 10s...`);
+            setTimeout(() => this.startUser(user), 10000);
             return;
         }
-        
-        this.emit('log', `✅ User ready [${user.serverName}/${user.username}] - starting monitoring loop`);
-        
-        // Start monitoring loop
         this.loop(user);
     }
 
-    /**
-     * 🚀 START ALL USERS
-     * Main entry point - starts monitoring for all configured users
-     */
     async start() {
-        this.emit('log', '🚀 Smart Auto-Login Multi-Server Worker Starting...');
-        this.emit('log', '📋 Features:');
-        this.emit('log', '   ✓ Login only when session expires');
-        this.emit('log', '   ✓ Auto session validation before login');
-        this.emit('log', '   ✓ 1-minute login cooldown protection');
-        this.emit('log', '   ✓ Network errors don\'t trigger login');
-        this.emit('log', '   ✓ Production-grade error handling');
-        this.emit('log', '');
+        this.emit('log', '🚀 Universal Multi-Server Worker Starting...');
         
+        if (!this.loadServersConfig()) {
+            this.emit('error', 'Failed to load server configuration!');
+            return;
+        }
+
         await this.updateUserAgents();
 
+        // Start all users from all servers
         for (const user of this.allUsers) {
-            this.emit('log', `🚀 Starting: [${user.serverName}] ${user.username}`);
+            this.emit('log', `🚀 Starting [${user.serverName}/${user.username}]`);
             this.startUser(user);
+            // Small delay between starting each user
             await new Promise(resolve => setTimeout(resolve, 2000));
         }
-        
-        this.emit('log', `✅ All ${this.allUsers.length} users started successfully`);
     }
 }
 
-module.exports = SmartAutoLoginPanel;
+module.exports = UniversalOtpWorker;
