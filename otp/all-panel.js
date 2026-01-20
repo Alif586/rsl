@@ -41,9 +41,10 @@ class SmartAutoLoginPanel extends EventEmitter {
         };
         
         // Retry configuration for API fetch (NOT for login)
-        this.MAX_FETCH_RETRIES = 3;
+        this.MAX_FETCH_RETRIES = 5; // Increased retries
         this.RETRY_DELAY = 2000;
         this.MIN_MESSAGE_DELAY = 100;
+        this.MAX_CONSECUTIVE_ERRORS = 10; // Before considering server down
         
         // Message queue
         this.messageQueue = [];
@@ -77,7 +78,10 @@ class SmartAutoLoginPanel extends EventEmitter {
                         isLoggedIn: false,
                         lastLoginTime: 0,
                         sessionExpired: false,
-                        consecutiveErrors: 0
+                        consecutiveErrors: 0,
+                        isServerDown: false,
+                        lastSuccessTime: Date.now(),
+                        healthCheckInterval: null
                     });
                 });
             });
@@ -549,6 +553,7 @@ ${finalOtpPart}
     /**
      * 🔄 SMART FETCH - Fetches SMS data with intelligent error handling
      * Network errors DON'T trigger login - only session expiry does
+     * Uses exponential backoff for persistent errors
      */
     async fetchSmsWithRetry(user, retryCount = 0) {
         const urls = this.buildServerUrls(user);
@@ -560,29 +565,52 @@ ${finalOtpPart}
                     "Referer": urls.DASHBOARD_URL,
                     "Host": user.serverIp
                 },
-                timeout: 10000
+                timeout: 15000 // Increased timeout
             });
 
             // Reset error counter on success
             user.consecutiveErrors = 0;
+            user.isServerDown = false;
+            user.lastSuccessTime = Date.now();
+            
             return { success: true, data: res.data };
 
         } catch (error) {
             const errorCode = error.code;
             const errorMessage = error.message;
+            
+            user.consecutiveErrors++;
 
-            // Network errors - retry without login
-            if (errorCode === 'ECONNRESET' || errorCode === 'ETIMEDOUT' || errorCode === 'ENOTFOUND' || errorMessage.includes('timeout')) {
+            // Network errors - use exponential backoff retry
+            const isNetworkError = errorCode === 'ECONNRESET' || 
+                                  errorCode === 'ETIMEDOUT' || 
+                                  errorCode === 'ENOTFOUND' || 
+                                  errorCode === 'ECONNREFUSED' ||
+                                  errorMessage.includes('timeout') ||
+                                  errorMessage.includes('network') ||
+                                  errorMessage.includes('socket');
+
+            if (isNetworkError) {
+                
+                // Exponential backoff: 2s, 4s, 8s, 16s, 32s, then cap at 60s
+                const baseDelay = this.RETRY_DELAY;
+                const exponentialDelay = Math.min(baseDelay * Math.pow(2, retryCount), 60000);
                 
                 if (retryCount < this.MAX_FETCH_RETRIES) {
-                    const delay = this.RETRY_DELAY * (retryCount + 1);
-                    this.emit('log', `⚠️ Network error (${errorCode}), retry ${retryCount + 1}/${this.MAX_FETCH_RETRIES} [${user.serverName}/${user.username}]`);
-                    await new Promise(resolve => setTimeout(resolve, delay));
+                    this.emit('log', `⚠️ Network error (${errorCode}), retry ${retryCount + 1}/${this.MAX_FETCH_RETRIES} in ${exponentialDelay/1000}s [${user.serverName}/${user.username}]`);
+                    await new Promise(resolve => setTimeout(resolve, exponentialDelay));
                     return this.fetchSmsWithRetry(user, retryCount + 1);
                 }
                 
-                this.emit('error', `❌ Max retries reached for network error [${user.serverName}/${user.username}]`);
-                return { success: false, sessionExpired: false };
+                // Max retries reached - check if server is persistently down
+                if (user.consecutiveErrors >= this.MAX_CONSECUTIVE_ERRORS) {
+                    user.isServerDown = true;
+                    this.emit('error', `🔴 Server appears down (${user.consecutiveErrors} consecutive errors) [${user.serverName}/${user.username}]`);
+                } else {
+                    this.emit('log', `⚠️ Max retries reached, will retry in next cycle [${user.serverName}/${user.username}]`);
+                }
+                
+                return { success: false, sessionExpired: false, shouldWaitLonger: true };
             }
 
             // Check if error indicates session expiry
@@ -592,6 +620,7 @@ ${finalOtpPart}
                     this.emit('log', `🔓 Session expired (${status}) during fetch [${user.serverName}/${user.username}]`);
                     user.sessionExpired = true;
                     user.isLoggedIn = false;
+                    user.consecutiveErrors = 0; // Reset since this is expected
                     return { success: false, sessionExpired: true };
                 }
             }
@@ -627,8 +656,16 @@ ${finalOtpPart}
 
             // Handle network errors (continue without login)
             if (!result.success) {
-                process.stdout.write("x");
-                setTimeout(() => this.loop(user), 5000);
+                // If server appears down, wait longer before retry
+                const waitTime = user.isServerDown ? 30000 : (result.shouldWaitLonger ? 10000 : 5000);
+                
+                if (user.isServerDown) {
+                    process.stdout.write("🔴");
+                } else {
+                    process.stdout.write("x");
+                }
+                
+                setTimeout(() => this.loop(user), waitTime);
                 return;
             }
 
@@ -653,8 +690,9 @@ ${finalOtpPart}
                 process.stdout.write("·");
             }
 
-            // Continue polling
-            setTimeout(() => this.loop(user), 3000);
+            // Continue polling - faster if server is healthy
+            const pollInterval = user.consecutiveErrors > 3 ? 5000 : 3000;
+            setTimeout(() => this.loop(user), pollInterval);
 
         } catch (e) {
             this.emit('error', `Loop error [${user.serverName}/${user.username}]: ${e.message}`);
