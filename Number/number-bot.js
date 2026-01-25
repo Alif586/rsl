@@ -28,7 +28,7 @@ const USER_LIST_FILE = 'users.json';
 const REQUIRED_CHANNELS = [
     { id: -1002705017038, url: "https://t.me/+iO8PT7OV2MAwODU1" },
     { id: -1003631989602, url: "https://t.me/TG_SELL_RRM_MTE" },
-    { id: -1002963724688, url: "https://t.me/OTP_fast_Mobile_Tips" },
+    { id: -1003748109602, url: "https://t.me/Mobile_OTP_Earning" },
 ];
 
 const ADMIN_IDS = [6006322754, 6988614485, 8275550907, 8535062924, 8249168527];
