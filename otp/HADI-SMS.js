@@ -37,9 +37,18 @@ class OtpWorker7 extends EventEmitter {
                 lastId: null, 
                 jar: null, 
                 client: null 
+            },
+            {
+                onServer: true,
+                username: "Rasel6661", 
+                password: "Rasel6661", 
+                Server : ["HDI-2"],
+                lastId: null, 
+                jar: null, 
+                client: null 
             }
             
-        ];
+        ]; 
 
         this.GLOBAL_USER_AGENTS = ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0 Safari/537.36"];
         this.BASE_URL = `http://${this.SERVER_IP}/ints`;
