@@ -42,7 +42,7 @@ class OtpWorker7 extends EventEmitter {
                 onServer: true,
                 username: "Rasel6661", 
                 password: "Rasel6661", 
-                Server : ["HDI-2"],
+                Server : ["HDI-3"],
                 lastId: null, 
                 jar: null, 
                 client: null 
