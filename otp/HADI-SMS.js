@@ -8,7 +8,7 @@ const countryEmoji = require("country-emoji");
 const mongoose = require("mongoose");
 const EventEmitter = require("events");
 
-class OtpWorker7 extends EventEmitter {
+class OtpWorker1 extends EventEmitter {
     constructor() {
         super();
         this.config = null;
@@ -22,33 +22,14 @@ class OtpWorker7 extends EventEmitter {
         this.users = [
             { 
                 onServer: true,
-                username: "Rasel6669", 
-                password: "Rasel6669", 
-                Server : ["HDI-1"], 
+                username: "Rasel6661", 
+                password: "Rasel6661", 
+                Server : ["HID-GP1"], 
                 lastId: null,
                 jar: null, 
                 client: null 
-            },
-            {
-                onServer: true,
-                username: "rasel01", 
-                password: "rasel01", 
-                Server : ["HDI-2"],
-                lastId: null, 
-                jar: null, 
-                client: null 
-            },
-            {
-                onServer: true,
-                username: "Rasel6661", 
-                password: "Rasel6661", 
-                Server : ["HDI-3"],
-                lastId: null, 
-                jar: null, 
-                client: null 
-            }
-            
-        ]; 
+            },           
+        ];
 
         this.GLOBAL_USER_AGENTS = ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0 Safari/537.36"];
         this.BASE_URL = `http://${this.SERVER_IP}/ints`;
@@ -268,4 +249,4 @@ ${finalOtpPart}
     }
 }
 
-module.exports = OtpWorke7;
+module.exports = OtpWorker1;
