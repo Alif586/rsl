@@ -24,11 +24,13 @@ class OtpWorker1 extends EventEmitter {
                 onServer: true,
                 username: "Rasel6661", 
                 password: "Rasel6661", 
-                Server : ["HID-GP1"], 
+                Server : ["HID-1"], 
                 lastId: null,
                 jar: null, 
                 client: null 
-            },           
+            }
+            
+            
         ];
 
         this.GLOBAL_USER_AGENTS = ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0 Safari/537.36"];
