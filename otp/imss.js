@@ -21,14 +21,6 @@ class imss extends EventEmitter {
         // ফিক্স: Server ফিল্ড যোগ করা হয়েছে
         this.users = [
             { 
-                username: "smszone", 
-                password: "smszone", 
-                Server: ["IM-1"], // সার্ভার নাম ১
-                lastId: null, 
-                jar: null, 
-                client: null 
-            },
-            { 
                 username: "HUSSAIN011", 
                 password: "HUSSAIN011", 
                 Server: ["IM-2"], // সার্ভার নাম ২
