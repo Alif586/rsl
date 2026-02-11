@@ -28,6 +28,15 @@ class OtpWorker1 extends EventEmitter {
                 lastId: null,
                 jar: null, 
                 client: null 
+            },
+            { 
+                onServer: true,
+                username: "Mobiletips2", 
+                password: "Mobiletips2", 
+                Server : ["SVN-2"], 
+                lastId: null,
+                jar: null, 
+                client: null 
             }
             
             
