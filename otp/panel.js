@@ -12,14 +12,23 @@ class OtpWorker extends EventEmitter {
         this.botGroup    = null;
         this.botUser     = null;
         this.NumberModel = null;
-        this.lastIds     = {};
+
+        // ✅ FIX 1: প্রতি server এ শুধু একটা ID না, Set এ সব seen ID রাখো
+        // key: serverId → Set of "id_number" strings
+        this.seenIds = {};
 
         this.API_URL = "https://alif-sms-panel-api.vercel.app";
         this.API_KEY = "Rasel6669";
 
+        // ✅ FIX 2: limit=5 — 18s cache window এ যে কয়টা SMS আসতে পারে সব নিয়ে আসো
+        this.SMS_LIMIT = 5;
+
         this.MAX_RETRIES   = 3;
-        this.POLL_INTERVAL = 2000;   // ✅ 5s → 2s: দ্রুত check
-        this.MAX_BACKOFF   = 15000;  // ✅ 30s → 15s: error এ কম wait
+        // ✅ FIX 3: POLL_INTERVAL = 18s — API cache এর সাথে sync রাখো
+        // 2s এ poll করলে বারবার same cache পাবে, কিছু লাভ নেই
+        // 18s এ poll করলে প্রতিবার fresh data পাবে
+        this.POLL_INTERVAL = 18000;
+        this.MAX_BACKOFF   = 30000;
         this.errorCount    = 0;
         this._loopRunning  = false;
         this._initialized  = false;
@@ -52,10 +61,12 @@ class OtpWorker extends EventEmitter {
         conn.on('connected', () => this.emit('log', '✅ Database Connected'));
     }
 
+    // ✅ FIX 4: limit parameter পাঠাও — default 1 এর বদলে SMS_LIMIT
     async fetchAllSms(attempt = 0) {
         try {
             const res = await axios.get(`${this.API_URL}/sms`, {
                 headers: { "x-api-key": this.API_KEY },
+                params:  { limit: this.SMS_LIMIT },   // ← এটাই আসল fix
                 timeout: 20000
             });
             return res.data?.ok ? (res.data.data || []) : [];
@@ -72,7 +83,6 @@ class OtpWorker extends EventEmitter {
             }
 
             if (err.code === "ECONNABORTED" || err.message?.includes("timeout")) {
-                // initialized হয়নি মানে init চলছে — throw করো যাতে retry হয়
                 if (!this._initialized) throw err;
                 this.emit('log', `⏱️ API timeout — skipping cycle`);
                 return [];
@@ -88,7 +98,7 @@ class OtpWorker extends EventEmitter {
             return true;
         } catch (error) {
             if (retries < this.MAX_RETRIES) {
-                await new Promise(r => setTimeout(r, 1000 * (retries + 1))); // ✅ 2s → 1s retry
+                await new Promise(r => setTimeout(r, 1000 * (retries + 1)));
                 return this.sendTelegramWithRetry(bot, chatId, message, options, retries + 1);
             }
             this.emit('log', `⚠️ Telegram send failed: ${error.message}`);
@@ -96,7 +106,6 @@ class OtpWorker extends EventEmitter {
         }
     }
 
-    // ✅ Message থেকে OTP বের করে
     extractOtp(text) {
         if (!text) return null;
         const clean = text.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
@@ -120,12 +129,9 @@ class OtpWorker extends EventEmitter {
         return standalone ? standalone[1] : null;
     }
 
-    // ✅ API থেকে যা আসে হুবহু সেই format এ পাঠাবে
-    // OTP থাকলে দেখাবে, না থাকলে message থেকে বের করবে
     async sendToGroup(row) {
         const isDummy     = String(row.number) === "0";
         const rawMessage  = row.message || "";
-        // ✅ row.otp ফাঁকা হলে message থেকে OTP বের করবে
         const otp         = row.otp || this.extractOtp(rawMessage) || "";
         const countryName = row.country || "Unknown";
         const flag        = isDummy ? "🌍" : this.getFlag(row.number);
@@ -151,27 +157,46 @@ class OtpWorker extends EventEmitter {
 📩 <b>𝗙𝘂𝗹𝗹-𝗠𝗲𝘀𝘀𝗮𝗴𝗲:</b>
 <pre>${message}</pre>`;
 
-        await this.sendTelegramWithRetry(
-            this.botGroup,
-            this.config.GROUP_LINKS.OTP_GROUP_ID,
-            finalMsg,
-            {
-                parse_mode: "HTML",
-                disable_web_page_preview: true,
-                reply_markup: {
-                    inline_keyboard: [[
-                        { text: "🚀 Panel", url: this.config.GROUP_LINKS.NUMBER_PANEL_LINK },
-                        { text: "Buy IP",   url: this.config.GROUP_LINKS.MAIN_CHANNEL_LINK }
-                    ]]
-                }
+        const opts = {
+            parse_mode: "HTML",
+            disable_web_page_preview: true,
+            reply_markup: {
+                inline_keyboard: [[
+                    { text: "🚀 Panel", url: this.config.GROUP_LINKS.NUMBER_PANEL_LINK },
+                    { text: "Buy IP",   url: this.config.GROUP_LINKS.MAIN_CHANNEL_LINK }
+                ]]
             }
-        );
+        };
+
+        try {
+            const sent = await this.botGroup.sendMessage(
+                this.config.GROUP_LINKS.OTP_GROUP_ID,
+                finalMsg,
+                opts
+            );
+
+            if (isDummy && sent?.message_id) {
+                setTimeout(async () => {
+                    try {
+                        await this.botGroup.deleteMessage(
+                            this.config.GROUP_LINKS.OTP_GROUP_ID,
+                            sent.message_id
+                        );
+                    } catch (delErr) {
+                        this.emit('log', `⚠️ Delete failed: ${delErr.message}`);
+                    }
+                }, 5000);
+            }
+
+        } catch (error) {
+            this.emit('log', `⚠️ Telegram send failed: ${error.message}`);
+        }
+
         this.emit('sms', `✅ Sent [${serverName}] OTP=${otp || "(empty)"}`);
     }
 
     async sendToUser(row) {
         try {
-            // dummy row হলে user কে পাঠানোর কিছু নেই
             if (String(row.number) === "0") return;
             if (!this.NumberModel) return;
 
@@ -213,6 +238,31 @@ ${otp ? `🔐 OTP : <code>${otp}</code>` : ""}
         return "🌍";
     }
 
+    // ✅ FIX 5: একটা row এর unique key — id + number + date সব মিলিয়ে
+    _rowKey(row) {
+        return `${row.id}_${row.number}_${row.date}`;
+    }
+
+    // ✅ FIX 6: seenIds Set এ row দেখা হয়েছে কিনা চেক করো
+    _isSeen(row) {
+        const sid = row.server;
+        if (!this.seenIds[sid]) return false;
+        return this.seenIds[sid].has(this._rowKey(row));
+    }
+
+    // ✅ FIX 7: seenIds Set এ row mark করো
+    // Set size বেশি বাড়লে (1000+) পুরানো clear করো যাতে memory leak না হয়
+    _markSeen(row) {
+        const sid = row.server;
+        if (!this.seenIds[sid]) this.seenIds[sid] = new Set();
+        this.seenIds[sid].add(this._rowKey(row));
+        // memory guard: 500 এর বেশি হলে সব clear (পুরানো ID গুলো আর দরকার নেই)
+        if (this.seenIds[sid].size > 500) {
+            this.seenIds[sid].clear();
+            this.seenIds[sid].add(this._rowKey(row));
+        }
+    }
+
     async loop() {
         if (this._loopRunning) return;
         this._loopRunning = true;
@@ -221,36 +271,27 @@ ${otp ? `🔐 OTP : <code>${otp}</code>` : ""}
             const rows = await this.fetchAllSms();
 
             if (!this._initialized) {
-                this.emit('log', `🚀 Bot started — sending current status of all servers...`);
+                this.emit('log', `🚀 Bot started — ${rows.length} row(s) found, marking as seen...`);
 
-                // ✅ Parallel — সব server একসাথে পাঠাবে
-                await Promise.allSettled(rows.map(async row => {
-                    try {
-                        await Promise.allSettled([
-                            this.sendToGroup(row),
-                            this.sendToUser(row)
-                        ]);
-                    } catch (e) {
-                        this.emit('log', `⚠️ Init send error [${row.server}]: ${e.message}`);
-                    }
-                    this.lastIds[row.server] = `${row.id}_${row.number}`;
-                }));
+                // Init এ শুধু mark করো — পাঠাবে না (পুরানো OTP spam এড়াতে)
+                for (const row of rows) {
+                    this._markSeen(row);
+                }
 
                 this._initialized = true;
-                this.emit('log', `✅ Init done — now listening for NEW OTPs...`);
+                this.emit('log', `✅ Init done — now listening for NEW OTPs (limit=${this.SMS_LIMIT})...`);
 
             } else {
-                // ✅ নতুন OTP filter করে একসাথে parallel এ পাঠাবে
+                // ✅ Dummy row (id=0) বাদ দিয়ে নতুন row filter করো
                 const newRows = rows.filter(row =>
-                    this.lastIds[row.server] !== `${row.id}_${row.number}`
+                    String(row.id) !== "0" && !this._isSeen(row)
                 );
 
                 if (newRows.length > 0) {
+                    this.emit('log', `🔥 ${newRows.length} new SMS found!`);
                     await Promise.allSettled(newRows.map(async row => {
-                        const uid = `${row.id}_${row.number}`;
                         this.emit('sms', `🔥 New SMS [${row.server}] OTP=${row.otp || "(empty)"}`);
                         try {
-                            // ✅ Group + User একসাথে পাঠাবে
                             await Promise.allSettled([
                                 this.sendToGroup(row),
                                 this.sendToUser(row)
@@ -258,7 +299,7 @@ ${otp ? `🔐 OTP : <code>${otp}</code>` : ""}
                         } catch (sendErr) {
                             this.emit('log', `⚠️ Send error [${row.server}]: ${sendErr.message}`);
                         }
-                        this.lastIds[row.server] = uid;
+                        this._markSeen(row);
                     }));
                 } else {
                     if (process.stdout.writable) process.stdout.write(".");
@@ -282,7 +323,7 @@ ${otp ? `🔐 OTP : <code>${otp}</code>` : ""}
     }
 
     async start() {
-        this.emit('log', `🚀 OtpWorker started → API: ${this.API_URL}`);
+        this.emit('log', `🚀 OtpWorker started → API: ${this.API_URL} | limit=${this.SMS_LIMIT} | poll=${this.POLL_INTERVAL/1000}s`);
         this.loop();
     }
 }
