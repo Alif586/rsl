@@ -7,8 +7,8 @@ const binance = express();
 
 // ✅ কনফিগারেশন
 const CONFIG = {
-    BINANCE_API_KEY: 'Xw6H6GvCzLr2Z99MQ9mMpG0hURRrbZjkJZ4qZSS8vixvAxVIDWji2dapU47Lieu7',
-    BINANCE_API_SECRET: '15RmcsQ2QkZ5EtVtmGsMcJ8jiBdc4ifSsqRi3tZxtc3If6ZkY3qNKNFYU1w4VYTh',
+    BINANCE_API_KEY: 'SVEucScvmaN2j99yZN3XNIr4GRrxkMSZ6oC98MPMiomFfHhNLRcClXyXW94bIJuO',
+    BINANCE_API_SECRET: 'kRl81H9ANzrYCIsCOzfVRtT99Xc5E76uU1cwRnRfwhxHDHNpTElbdczNnXswtF75',
     MONGO_URI: 'mongodb+srv://sabbirrehman905_db_user:sabbir123@userjson.f0vppgx.mongodb.net/UserDB?appName=Userjson',
     PORT: 3000
 };
