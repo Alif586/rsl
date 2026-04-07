@@ -11,7 +11,7 @@ const ADMIN_IDS = ["6006322754", "6135656510", "1817149496"];
 // 🤖 BOT CONFIGURATION
 // ============================================================
 const BOT_TOKENS = {
-    NOTIFICATION_BOT: "8710334097:AAFoQNF5QDJWMHgMXNkXCfhT1c3xWpj_gtc", // Bot 1
+    NOTIFICATION_BOT: "8658998311:AAG9-3f-j6gnv5uVhtugmtUnPwoBZI6IZVk", // Bot 1
     USER_BOT: "8499409386:AAE7w7F61I3PBGY8NwGYE7xEcaSrEW8n6Yw"         // Bot 2
 };
 
