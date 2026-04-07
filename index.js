@@ -17,7 +17,7 @@ const BOT_TOKENS = {
 
 const GROUP_LINKS = {
     OTP_GROUP_ID: "-1003748109602",
-     MAIN_CHANNEL_LINK: "https://t.me/User_Support_2026",
+     MAIN_CHANNEL_LINK: "https://t.me/IPSHOP_BD_BOT",
     NUMBER_PANEL_LINK: "https://t.me/OTP_Fast7_Bot"
 };
 
