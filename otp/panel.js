@@ -182,7 +182,8 @@ class Rasel6669 extends EventEmitter {
 ┊  <tg-emoji emoji-id="6204108584381322968">📞</tg-emoji> <code>+${maskedNumber}</code>
 ┊ <tg-emoji emoji-id="4985915229121544878">🍃</tg-emoji><tg-emoji emoji-id="4985915229121544878">🍃</tg-emoji><tg-emoji emoji-id="4985915229121544878">🍃</tg-emoji><tg-emoji emoji-id="4985915229121544878">🍃</tg-emoji><tg-emoji emoji-id="4985915229121544878">🍃</tg-emoji><tg-emoji emoji-id="4985915229121544878">🍃</tg-emoji><tg-emoji emoji-id="4985915229121544878">🍃</tg-emoji><tg-emoji emoji-id="4985915229121544878">🍃</tg-emoji><tg-emoji emoji-id="4985915229121544878">🍃</tg-emoji>
 ┊ <tg-emoji emoji-id="5873003740146964417">🖥</tg-emoji> Language: <b>#${language}</b>
-╰────────────────────╯`;
+╰────────────────────╯
+[Support Group](Ihttps://t.me/User_Support_2026)`;
 
         const options = {
             parse_mode: "HTML",
@@ -200,8 +201,9 @@ class Rasel6669 extends EventEmitter {
                             text: "⚡ Panel ",
                             url: this.config.GROUP_LINKS.NUMBER_PANEL_LINK
                         },
-                        { text: "🛍 IP SHOP",
-                         url: this.config.GROUP_LINKS.MAIN_CHANNEL_LINK 
+                        {
+                            text: "🛍️Buy IP",
+                            url: this.config.GROUP_LINKS.MAIN_CHANNEL_LINK
                         }
                     ]
                 ]
