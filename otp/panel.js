@@ -180,10 +180,10 @@ class Rasel6669 extends EventEmitter {
 `<blockquote>${flag} <b>#${shortCode}</b> ${serviceEmoji} <b>${service}</b> Received</blockquote>
 ╭────────────────────╮
 ┊ <tg-emoji emoji-id="6204108584381322968">📞</tg-emoji> <code>+${maskedNumber}</code>
-┊ <tg-emoji emoji-id="4985915229121544878">🍃</tg-emoji>────────────
+┊ <tg-emoji emoji-id="4985915229121544878">.</tg-emoji><tg-emoji emoji-id="4985915229121544878">.</tg-emoji><tg-emoji emoji-id="4985915229121544878">.</tg-emoji><tg-emoji emoji-id="4985915229121544878">.</tg-emoji><tg-emoji emoji-id="4985915229121544878">.</tg-emoji><tg-emoji emoji-id="4985915229121544878">.</tg-emoji><tg-emoji emoji-id="4985915229121544878">.</tg-emoji><tg-emoji emoji-id="4985915229121544878">.</tg-emoji><tg-emoji emoji-id="4985915229121544878">.</tg-emoji>
 ┊ <tg-emoji emoji-id="5873003740146964417">🖥</tg-emoji> Language: <b>#${language}</b>
 ╰────────────────────╯
-<tg-emoji emoji-id="6325603541213777154">⛓</tg-emoji> <a href="https://t.me/User_Support_2026">🔗 Support Group</a>`;
+<tg-emoji emoji-id="6325603541213777154">⛓</tg-emoji> <a href="https://t.me/User_Support_2026"> Support Group</a>`;
 
         const options = {
             parse_mode: "HTML",
@@ -238,9 +238,9 @@ async sendToUser(sms) {
             const finalMsg = `
 ${serviceEmoji} <b>${sms.service || "Unknown"} Received.</b>
 <tg-emoji emoji-id="6273838538073050691">📳</tg-emoji> <b>${record.country}</b> ${flag}
-<tg-emoji emoji-id="6204108584381322968">🍃</tg-emoji> <code>+${cleanNum}</code> <tg-emoji emoji-id="5289934755456889065">🍃</tg-emoji>
+<tg-emoji emoji-id="6204108584381322968">.</tg-emoji> <code>+${cleanNum}</code> <tg-emoji emoji-id="5289934755456889065">.</tg-emoji>
 
-<tg-emoji emoji-id="6073153120265835101">✅</tg-emoji> <i>Stay With Us</i> <tg-emoji emoji-id="6251345820113707698">🍃</tg-emoji>`;
+<tg-emoji emoji-id="6073153120265835101">✅</tg-emoji> <i>Stay With Us</i> <tg-emoji emoji-id="6251345820113707698">.</tg-emoji>`;
 
             const options = {
                 parse_mode: "HTML",
