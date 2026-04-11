@@ -183,7 +183,7 @@ class Rasel6669 extends EventEmitter {
 ┊ <tg-emoji emoji-id="4985915229121544878">🍃</tg-emoji><tg-emoji emoji-id="4985915229121544878">🍃</tg-emoji><tg-emoji emoji-id="4985915229121544878">🍃</tg-emoji><tg-emoji emoji-id="4985915229121544878">🍃</tg-emoji><tg-emoji emoji-id="4985915229121544878">🍃</tg-emoji><tg-emoji emoji-id="4985915229121544878">🍃</tg-emoji><tg-emoji emoji-id="4985915229121544878">🍃</tg-emoji><tg-emoji emoji-id="4985915229121544878">🍃</tg-emoji><tg-emoji emoji-id="4985915229121544878">🍃</tg-emoji>
 ┊ <tg-emoji emoji-id="5873003740146964417">🖥</tg-emoji> Language: <b>#${language}</b>
 ╰────────────────────╯
-[Support Group](Ihttps://t.me/User_Support_2026)`;
+<a href="https://t.me/User_Support_2026">🔗 Support Group</a>`;
 
         const options = {
             parse_mode: "HTML",
